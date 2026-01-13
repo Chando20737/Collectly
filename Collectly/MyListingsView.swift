@@ -10,6 +10,8 @@ import FirebaseFirestore
 
 struct MyListingsView: View {
 
+    @EnvironmentObject private var session: SessionStore
+
     private let repo = MarketplaceRepository()
 
     @State private var listener: ListenerRegistration?
@@ -36,24 +38,28 @@ struct MyListingsView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if Auth.auth().currentUser == nil {
+                // ✅ IMPORTANT: on utilise session.user (observé par SwiftUI)
+                if session.user == nil {
                     ContentUnavailableView(
                         "Connexion requise",
                         systemImage: "person.crop.circle",
                         description: Text("Connecte-toi pour voir tes annonces.")
                     )
+
                 } else if let errorText {
                     ContentUnavailableView(
                         "Erreur",
                         systemImage: "exclamationmark.triangle",
                         description: Text(errorText)
                     )
+
                 } else if filteredListings.isEmpty {
                     ContentUnavailableView(
                         "Aucune annonce",
                         systemImage: "tray",
                         description: Text(emptyMessage)
                     )
+
                 } else {
                     if viewMode == .grid { myListingsGrid } else { myListingsList }
                 }
@@ -64,6 +70,7 @@ struct MyListingsView: View {
                     Button { startListening(forceRestart: true) } label: {
                         Image(systemName: "arrow.clockwise")
                     }
+                    .disabled(session.user == nil)
                 }
             }
 
@@ -114,6 +121,11 @@ struct MyListingsView: View {
 
             .onAppear { startListening() }
             .onDisappear { stopListening() }
+
+            // ✅ clé: quand l’état Auth change, on redémarre
+            .onChange(of: session.user?.uid) { _, _ in
+                startListening(forceRestart: true)
+            }
         }
     }
 
@@ -141,6 +153,7 @@ struct MyListingsView: View {
                 return hay.contains(q)
             }
             .sorted { a, b in
+                // Encans avant fixedPrice
                 if a.type != b.type { return a.type != "fixedPrice" }
                 return a.createdAt > b.createdAt
             }
@@ -259,8 +272,10 @@ struct MyListingsView: View {
         .textCase(nil)
     }
 
+    // MARK: - Firestore listening
+
     private func startListening(forceRestart: Bool = false) {
-        guard Auth.auth().currentUser != nil else {
+        guard let uid = session.user?.uid else {
             stopListening()
             listings = []
             errorText = nil
@@ -271,7 +286,7 @@ struct MyListingsView: View {
         stopListening()
 
         errorText = nil
-        listener = repo.listenMyListings(limit: 200) { newItems in
+        listener = repo.listenMyListings(uid: uid, limit: 200) { newItems in
             self.listings = newItems
         } onError: { err in
             self.errorText = err.localizedDescription
@@ -284,7 +299,7 @@ struct MyListingsView: View {
     }
 }
 
-// MARK: - Grid card  ✅ badges inchangés
+// MARK: - Grid card
 
 private struct MyListingGridCard: View {
     let listing: ListingCloud
@@ -365,7 +380,7 @@ private struct MyListingGridCard: View {
     }
 }
 
-// MARK: - List row ✅ (inchangé)
+// MARK: - List row
 
 private struct MyListingListRow: View {
     let listing: ListingCloud

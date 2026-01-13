@@ -11,7 +11,7 @@
 		573600EB2F12D9690015A656 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 573600EA2F12D9690015A656 /* FirebaseCore */; };
 		573600ED2F12D9690015A656 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 573600EC2F12D9690015A656 /* FirebaseFirestore */; };
 		573600EF2F12D9690015A656 /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 573600EE2F12D9690015A656 /* FirebaseStorage */; };
-		57C83EBE2F16084E005F75D3 /* .gitignore in Sources */ = {isa = PBXBuildFile; fileRef = 57C83EBD2F16084A005F75D3 /* .gitignore */; };
+		57C83EC52F160C28005F75D3 /* .gitignore in Resources */ = {isa = PBXBuildFile; fileRef = 57C83EC42F160C28005F75D3 /* .gitignore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -35,7 +35,7 @@
 		57219D5C2F12A22E00808E5C /* Collectly.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Collectly.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		57219D6D2F12A23200808E5C /* CollectlyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CollectlyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		57219D772F12A23200808E5C /* CollectlyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CollectlyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		57C83EBD2F16084A005F75D3 /* .gitignore */ = {isa = PBXFileReference; lastKnownFileType = text; path = .gitignore; sourceTree = "<group>"; };
+		57C83EC42F160C28005F75D3 /* .gitignore */ = {isa = PBXFileReference; lastKnownFileType = text; path = .gitignore; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -101,11 +101,11 @@
 		57219D532F12A22E00808E5C = {
 			isa = PBXGroup;
 			children = (
+				57C83EC42F160C28005F75D3 /* .gitignore */,
 				57219D5E2F12A22E00808E5C /* Collectly */,
 				57219D702F12A23200808E5C /* CollectlyTests */,
 				57219D7A2F12A23200808E5C /* CollectlyUITests */,
 				57219D5D2F12A22E00808E5C /* Products */,
-				57C83EBD2F16084A005F75D3 /* .gitignore */,
 			);
 			sourceTree = "<group>";
 		};
@@ -246,6 +246,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				57C83EC52F160C28005F75D3 /* .gitignore in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -270,7 +271,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				57C83EBE2F16084E005F75D3 /* .gitignore in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -5,6 +5,7 @@
 //  Created by Eric Chandonnet on 2026-01-11.
 //
 import SwiftUI
+import Combine
 
 struct BidSheetView: View {
     let listingId: String
@@ -18,28 +19,27 @@ struct BidSheetView: View {
     @State private var isSubmitting = false
     @State private var errorText: String?
 
+    @State private var now: Date = Date()
+    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
     private let service = MarketplaceService()
 
     var body: some View {
         NavigationStack {
             Form {
 
-                // ✅ Info encan + compte à rebours
                 if let endDate {
-                    TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                        let now = ctx.date
+                    Section("Encan") {
                         let ended = endDate <= now
 
-                        Section("Encan") {
-                            Text("Temps restant: \(timeRemainingText(until: endDate, now: now))")
-                                .font(.footnote)
-                                .foregroundStyle(ended ? .red : .secondary)
+                        Text("Temps restant: \(timeRemainingText(until: endDate, now: now))")
+                            .font(.footnote)
+                            .foregroundStyle(ended ? .red : .secondary)
 
-                            if ended {
-                                Text("Cet encan est terminé. Tu ne peux plus miser.")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
+                        if ended {
+                            Text("Cet encan est terminé. Tu ne peux plus miser.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -61,16 +61,12 @@ struct BidSheetView: View {
                 }
 
                 Section {
-                    TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                        let now = ctx.date
-                        let ended = (endDate?.compare(now) != .orderedDescending) && (endDate != nil)
-                        // ended == true si endDate existe ET endDate <= now
+                    let ended = (endDate != nil && (endDate! <= now))
 
-                        Button(isSubmitting ? "Envoi..." : "Miser") {
-                            submit()
-                        }
-                        .disabled(isSubmitting || ended)
+                    Button(isSubmitting ? "Envoi..." : "Miser") {
+                        submit()
                     }
+                    .disabled(isSubmitting || ended)
                 }
             }
             .navigationTitle("Miser")
@@ -82,15 +78,17 @@ struct BidSheetView: View {
             }
         }
         .onAppear {
-            // Suggestion: mise minimale +1
             bidText = String(format: "%.0f", minBidCAD + 1)
+            now = Date()
+        }
+        .onReceive(timer) { value in
+            now = value
         }
     }
 
     private func submit() {
         errorText = nil
 
-        // Stop si déjà terminé (sécurité UI)
         if let endDate, endDate <= Date() {
             errorText = "Cet encan est terminé."
             return

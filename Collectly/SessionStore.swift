@@ -8,52 +8,31 @@ import Foundation
 import Combine
 import FirebaseAuth
 
+@MainActor
 final class SessionStore: ObservableObject {
 
-    @Published private(set) var user: User? = Auth.auth().currentUser
+    @Published var user: FirebaseAuth.User? = nil
 
     private var handle: AuthStateDidChangeListenerHandle?
 
     init() {
-        start()
+        // État initial
+        self.user = Auth.auth().currentUser
+
+        // 🔥 Écoute les changements de connexion/déconnexion
+        handle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
+            guard let self else { return }
+            self.user = user
+            print("✅ Auth state changed. user = \(user?.uid ?? "nil")")
+        }
     }
 
     deinit {
-        // Évite les problèmes d’isolation actor dans deinit
-        if let handle {
-            Auth.auth().removeStateDidChangeListener(handle)
-        }
-        handle = nil
+        if let handle { Auth.auth().removeStateDidChangeListener(handle) }
     }
 
-    func start() {
-        // Évite d’ajouter 2 listeners
-        guard handle == nil else { return }
-
-        handle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
-            // On publie toujours sur le main thread pour SwiftUI
-            DispatchQueue.main.async {
-                self?.user = user
-            }
-        }
-    }
-
-    func stop() {
-        if let handle {
-            Auth.auth().removeStateDidChangeListener(handle)
-        }
-        handle = nil
-    }
-
-    func signOut() {
-        do {
-            try Auth.auth().signOut()
-            // user sera mis à jour par le listener, mais on peut aussi le mettre nil immédiatement
-            DispatchQueue.main.async {
-                self.user = nil
-            }
-        } catch {
-            print("❌ SignOut error:", error)
-        }
+    func signOut() throws {
+        try Auth.auth().signOut()
+        // Le listener mettra user=nil automatiquement
     }
 }

@@ -26,8 +26,13 @@ struct ProfileView: View {
                             .foregroundStyle(.secondary)
 
                         Button("Se déconnecter", role: .destructive) {
-                            // ✅ session.signOut() ne lance pas d'erreur -> pas de try/catch
-                            session.signOut()
+                            do {
+                                try session.signOut()
+                                debugMessage = "✅ Déconnecté"
+                            } catch {
+                                debugMessage = "❌ Erreur signOut: \(error.localizedDescription)"
+                                print("❌ Erreur signOut:", error)
+                            }
                         }
                     } else {
                         Text("Non connecté")
@@ -79,4 +84,3 @@ struct ProfileView: View {
         }
     }
 }
-

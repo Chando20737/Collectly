@@ -5,7 +5,6 @@
 //  Created by Eric Chandonnet on 2026-01-10.
 //
 import Foundation
-import FirebaseAuth
 import FirebaseFirestore
 
 final class MarketplaceRepository {
@@ -24,12 +23,13 @@ final class MarketplaceRepository {
             .order(by: "createdAt", descending: true)
             .limit(to: limit)
 
-        return q.addSnapshotListener { snap, error in
+        return q.addSnapshotListener { [weak self] snap, error in
             if let error {
                 print("🔥 LISTENER ERROR in MarketplaceRepository.listenPublicActiveListings:", error)
                 onError(error)
                 return
             }
+
             guard let snap else {
                 onUpdate([])
                 return
@@ -37,36 +37,33 @@ final class MarketplaceRepository {
 
             let items = snap.documents.map { ListingCloud.fromFirestore(doc: $0) }
 
-            // ✅ Auto-terminer les enchères expirées (si jamais une “active” est expirée)
-            self.autoEndExpiredAuctionsIfNeeded(items)
+            // ✅ Auto-terminer les enchères expirées (best effort)
+            self?.autoEndExpiredAuctionsIfNeeded(items)
 
             onUpdate(items)
         }
     }
 
-    // ✅ Listener Mes annonces (sellerId == uid)
+    // ✅ Listener Mes annonces (sellerId == uid) — on passe uid depuis la View
     func listenMyListings(
+        uid: String,
         limit: Int = 100,
         onUpdate: @escaping ([ListingCloud]) -> Void,
         onError: @escaping (Error) -> Void
-    ) -> ListenerRegistration? {
-
-        guard let uid = Auth.auth().currentUser?.uid else {
-            onUpdate([])
-            return nil
-        }
+    ) -> ListenerRegistration {
 
         let q = db.collection("listings")
             .whereField("sellerId", isEqualTo: uid)
             .order(by: "createdAt", descending: true)
             .limit(to: limit)
 
-        return q.addSnapshotListener { snap, error in
+        return q.addSnapshotListener { [weak self] snap, error in
             if let error {
                 print("🔥 LISTENER ERROR in MarketplaceRepository.listenMyListings:", error)
                 onError(error)
                 return
             }
+
             guard let snap else {
                 onUpdate([])
                 return
@@ -75,7 +72,7 @@ final class MarketplaceRepository {
             let items = snap.documents.map { ListingCloud.fromFirestore(doc: $0) }
 
             // ✅ Auto-terminer les enchères expirées pour que “Mes annonces” devienne Terminée
-            self.autoEndExpiredAuctionsIfNeeded(items)
+            self?.autoEndExpiredAuctionsIfNeeded(items)
 
             onUpdate(items)
         }
@@ -84,22 +81,21 @@ final class MarketplaceRepository {
     // MARK: - Auto end auctions
 
     /// Termine automatiquement (status="ended") les encans expirés.
-    /// - important: Transaction pour éviter les doubles écritures / race conditions.
+    /// - Best effort : on ne bloque pas l'UI si ça échoue.
     private func autoEndExpiredAuctionsIfNeeded(_ items: [ListingCloud]) {
         let now = Date()
 
-        let expired = items.filter { l in
-            // Un encan = type "auction"
-            guard l.type == "auction" else { return false }
-            guard l.status == "active" else { return false }
-            guard let end = l.endDate else { return false }
-            return end <= now
+        let expiredIds = items.compactMap { l -> String? in
+            guard l.type == "auction" else { return nil }
+            guard l.status == "active" else { return nil }
+            guard let end = l.endDate else { return nil }
+            return (end <= now) ? l.id : nil
         }
 
-        guard !expired.isEmpty else { return }
+        guard !expiredIds.isEmpty else { return }
 
-        for l in expired {
-            endAuctionIfExpiredTransaction(listingId: l.id)
+        for id in expiredIds {
+            endAuctionIfExpiredTransaction(listingId: id)
         }
     }
 
@@ -117,16 +113,15 @@ final class MarketplaceRepository {
                 guard type == "auction" else { return nil }
                 guard status == "active" else { return nil }
 
-                if let endTs = data["endDate"] as? Timestamp {
-                    let endDate = endTs.dateValue()
-                    guard endDate <= now else { return nil }
+                guard let endTs = data["endDate"] as? Timestamp else { return nil }
+                let endDate = endTs.dateValue()
+                guard endDate <= now else { return nil }
 
-                    transaction.updateData([
-                        "status": "ended",
-                        "endedAt": Timestamp(date: now),
-                        "updatedAt": Timestamp(date: now)
-                    ], forDocument: ref)
-                }
+                transaction.updateData([
+                    "status": "ended",
+                    "endedAt": Timestamp(date: now),
+                    "updatedAt": Timestamp(date: now)
+                ], forDocument: ref)
 
                 return true
             } catch {
@@ -135,10 +130,9 @@ final class MarketplaceRepository {
             }
         }, completion: { _, error in
             if let error {
-                // On ne bloque pas l'UI : best-effort
+                // Best effort : on ne bloque pas l'UI
                 print("⚠️ autoEndExpiredAuctions error:", error.localizedDescription)
             }
         })
     }
 }
-

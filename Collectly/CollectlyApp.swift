@@ -11,10 +11,10 @@ import FirebaseCore
 @main
 struct CollectlyApp: App {
 
-    // ✅ UNE seule instance globale
+    // ✅ UNE seule instance globale (injectée partout)
     @StateObject private var session = SessionStore()
 
-    // SwiftData container (persistant) - avec fallback si migration échoue
+    // ✅ SwiftData container (persistant) - avec fallback si migration échoue
     private var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             CardItem.self,
@@ -38,19 +38,25 @@ struct CollectlyApp: App {
             do {
                 return try ModelContainer(for: schema, configurations: [modelConfiguration])
             } catch {
-                fatalError("Could not create ModelContainer even after reset: \(error)")
+                fatalError("❌ Could not create ModelContainer even after reset: \(error)")
             }
         }
     }()
 
     init() {
-        FirebaseApp.configure()
+        // ✅ Firebase doit être configuré UNE seule fois au démarrage
+        if FirebaseApp.app() == nil {
+            FirebaseApp.configure()
+        }
+
+        // (Optionnel) Debug rapide
+        // print("✅ Firebase configured. Apps: \(FirebaseApp.allApps?.keys ?? [])")
     }
 
     var body: some Scene {
         WindowGroup {
             AppEntryView()
-                .environmentObject(session)     // ✅ injecte partout
+                .environmentObject(session) // ✅ injecte partout
         }
         .modelContainer(sharedModelContainer)
     }

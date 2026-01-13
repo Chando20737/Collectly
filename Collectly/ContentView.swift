@@ -11,6 +11,7 @@ import PhotosUI
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var session: SessionStore   // ✅ AJOUT
 
     @Query(sort: \CardItem.createdAt, order: .reverse)
     private var cards: [CardItem]
@@ -85,116 +86,141 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            let items = filteredSortedAndFilteredCards
 
-            Group {
-                if items.isEmpty {
-                    ContentUnavailableView(
-                        "Ma collection",
-                        systemImage: "rectangle.stack",
-                        description: Text(emptyMessage)
-                    )
-                } else {
-                    VStack(spacing: 0) {
+            // ✅ B = déconnecté -> on CACHE la collection
+            if session.user == nil {
+                ContentUnavailableView(
+                    "Ma collection",
+                    systemImage: "rectangle.stack",
+                    description: Text("Connecte-toi pour voir ta collection.")
+                )
+                .navigationTitle("")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    // On laisse le + visible, mais désactivé, pour que ce soit clair.
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showAddSheet = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .disabled(true)
+                        .accessibilityLabel("Ajouter une carte")
+                    }
+                }
 
-                        // ✅ Petit header compact
-                        CollectionMiniHeader(
-                            count: items.count,
-                            hasActiveFilter: filter != .all,
-                            sortLabel: sort.rawValue
+            } else {
+                // ✅ Connecté -> comportement normal
+                let items = filteredSortedAndFilteredCards
+
+                Group {
+                    if items.isEmpty {
+                        ContentUnavailableView(
+                            "Ma collection",
+                            systemImage: "rectangle.stack",
+                            description: Text(emptyMessage)
                         )
-                        .padding(.horizontal, 12)
-                        .padding(.top, 8)
-                        .padding(.bottom, 6)
+                    } else {
+                        VStack(spacing: 0) {
 
-                        // ✅ Sélecteur Grille / Liste
-                        Picker("Affichage", selection: $viewMode) {
-                            ForEach(ViewMode.allCases) { m in
-                                Text(m.rawValue).tag(m)
+                            // ✅ Petit header compact
+                            CollectionMiniHeader(
+                                count: items.count,
+                                hasActiveFilter: filter != .all,
+                                sortLabel: sort.rawValue
+                            )
+                            .padding(.horizontal, 12)
+                            .padding(.top, 8)
+                            .padding(.bottom, 6)
+
+                            // ✅ Sélecteur Grille / Liste
+                            Picker("Affichage", selection: $viewMode) {
+                                ForEach(ViewMode.allCases) { m in
+                                    Text(m.rawValue).tag(m)
+                                }
                             }
-                        }
-                        .pickerStyle(.segmented)
-                        .padding(.horizontal, 12)
-                        .padding(.bottom, 8)
+                            .pickerStyle(.segmented)
+                            .padding(.horizontal, 12)
+                            .padding(.bottom, 8)
 
-                        if viewMode == .grid {
-                            collectionGrid(items)
-                        } else {
-                            collectionList(items)
+                            if viewMode == .grid {
+                                collectionGrid(items)
+                            } else {
+                                collectionList(items)
+                            }
                         }
                     }
                 }
-            }
-            .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $searchText, prompt: "Rechercher une carte…")
-            .toolbar {
+                .navigationTitle("")
+                .navigationBarTitleDisplayMode(.inline)
+                .searchable(text: $searchText, prompt: "Rechercher une carte…")
+                .toolbar {
 
-                // ✅ Filtrer
-                ToolbarItem(placement: .topBarLeading) {
-                    Menu {
-                        Picker("Filtrer", selection: $filter) {
-                            ForEach(FilterOption.allCases) { opt in
-                                Label(opt.rawValue, systemImage: opt.systemImage)
-                                    .tag(opt)
+                    // ✅ Filtrer
+                    ToolbarItem(placement: .topBarLeading) {
+                        Menu {
+                            Picker("Filtrer", selection: $filter) {
+                                ForEach(FilterOption.allCases) { opt in
+                                    Label(opt.rawValue, systemImage: opt.systemImage)
+                                        .tag(opt)
+                                }
                             }
-                        }
 
-                        if filter != .all {
-                            Divider()
-                            Button(role: .destructive) {
-                                filter = .all
-                            } label: {
-                                Label("Réinitialiser les filtres", systemImage: "xmark.circle")
+                            if filter != .all {
+                                Divider()
+                                Button(role: .destructive) {
+                                    filter = .all
+                                } label: {
+                                    Label("Réinitialiser les filtres", systemImage: "xmark.circle")
+                                }
                             }
+                        } label: {
+                            Image(systemName: filter == .all
+                                  ? "line.3.horizontal.decrease.circle"
+                                  : "line.3.horizontal.decrease.circle.fill")
                         }
-                    } label: {
-                        Image(systemName: filter == .all
-                              ? "line.3.horizontal.decrease.circle"
-                              : "line.3.horizontal.decrease.circle.fill")
+                        .accessibilityLabel("Filtrer")
                     }
-                    .accessibilityLabel("Filtrer")
-                }
 
-                // ✅ Trier
-                ToolbarItem(placement: .topBarLeading) {
-                    Menu {
-                        Picker("Trier", selection: $sort) {
-                            ForEach(SortOption.allCases) { opt in
-                                Label(opt.rawValue, systemImage: opt.systemImage)
-                                    .tag(opt)
+                    // ✅ Trier
+                    ToolbarItem(placement: .topBarLeading) {
+                        Menu {
+                            Picker("Trier", selection: $sort) {
+                                ForEach(SortOption.allCases) { opt in
+                                    Label(opt.rawValue, systemImage: opt.systemImage)
+                                        .tag(opt)
+                                }
                             }
+                        } label: {
+                            Image(systemName: "arrow.up.arrow.down")
                         }
-                    } label: {
-                        Image(systemName: "arrow.up.arrow.down")
+                        .accessibilityLabel("Trier")
                     }
-                    .accessibilityLabel("Trier")
-                }
 
-                // ✅ Ajouter
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showAddSheet = true
-                    } label: {
-                        Image(systemName: "plus")
+                    // ✅ Ajouter
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showAddSheet = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .accessibilityLabel("Ajouter une carte")
                     }
-                    .accessibilityLabel("Ajouter une carte")
                 }
-            }
-
-            .sheet(isPresented: $showAddSheet) {
-                AddCardView()
-            }
-
-            .alert("Erreur", isPresented: Binding(
-                get: { uiErrorText != nil },
-                set: { if !$0 { uiErrorText = nil } }
-            )) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(uiErrorText ?? "")
+                .sheet(isPresented: $showAddSheet) {
+                    AddCardView()
+                }
+                .alert("Erreur", isPresented: Binding(
+                    get: { uiErrorText != nil },
+                    set: { if !$0 { uiErrorText = nil } }
+                )) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text(uiErrorText ?? "")
+                }
             }
         }
+        // Note: pas de sheet AddCardView quand déconnecté, parce que showAddSheet reste false et le bouton est disabled
     }
 
     // MARK: - Grid

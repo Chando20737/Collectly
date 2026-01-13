@@ -1,0 +1,23 @@
+//
+//  Untitled.swift
+//  Collectly
+//
+//  Created by Eric Chandonnet on 2026-01-12.
+//
+# Xcode
+DerivedData/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.xcuserdata/
+
+# macOS
+.DS_Store
+
+# SwiftPM
+.build/
+.swiftpm/
+
+# Logs
+*.log
+

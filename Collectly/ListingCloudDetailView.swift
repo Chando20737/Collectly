@@ -29,14 +29,12 @@ struct ListingCloudDetailView: View {
     var body: some View {
         Form {
 
-            // MARK: - Image
             Section {
                 ListingRemoteHeroImage(urlString: current.imageUrl)
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
             }
 
-            // MARK: - Main info
             Section {
                 Text(current.title)
                     .font(.headline)
@@ -47,7 +45,6 @@ struct ListingCloudDetailView: View {
                 }
             }
 
-            // MARK: - Listing info
             Section("Annonce") {
 
                 HStack {
@@ -90,7 +87,6 @@ struct ListingCloudDetailView: View {
                 }
             }
 
-            // MARK: - Owner controls
             if isOwner {
                 Section("Gestion") {
 
@@ -119,7 +115,6 @@ struct ListingCloudDetailView: View {
                 }
             }
 
-            // MARK: - Errors
             if let uiErrorText {
                 Section("Erreur") {
                     Text(uiErrorText)
@@ -139,38 +134,26 @@ struct ListingCloudDetailView: View {
         .onDisappear { stopListening() }
     }
 
-    // MARK: - Ownership & rules
-
     private var isOwner: Bool {
         guard let uid = Auth.auth().currentUser?.uid else { return false }
         return current.sellerId == uid
     }
 
     private var canTogglePause: Bool {
-        // On permet pause/resume uniquement si l’annonce n’est pas sold/ended
         if current.status == "sold" || current.status == "ended" { return false }
-
-        // Pour un encan, on peut mettre en pause seulement s'il n'y a aucune mise
-        if current.type == "auction" {
-            return current.bidCount == 0
-        }
-
-        // Prix fixe: ok tant que pas sold/ended
+        if current.type == "auction" { return current.bidCount == 0 }
         return true
     }
 
     private var canEndNow: Bool {
-        // Retirer l’annonce
         if current.status == "sold" || current.status == "ended" { return false }
 
         if current.type == "fixedPrice" {
-            // active/paused -> ok
             return current.status == "active" || current.status == "paused"
         }
 
         if current.type == "auction" {
-            // seulement si active ET aucune mise
-            return current.status == "active" && current.bidCount == 0
+            return (current.status == "active" || current.status == "paused") && current.bidCount == 0
         }
 
         return false
@@ -192,8 +175,6 @@ struct ListingCloudDetailView: View {
         return ""
     }
 
-    // MARK: - Firestore live update
-
     private func startListening() {
         stopListening()
         uiErrorText = nil
@@ -214,8 +195,6 @@ struct ListingCloudDetailView: View {
         listener?.remove()
         listener = nil
     }
-
-    // MARK: - Actions
 
     private func togglePauseResume() async {
         guard isOwner else { return }
@@ -260,8 +239,6 @@ struct ListingCloudDetailView: View {
         }
     }
 
-    // MARK: - Helpers
-
     private func statusLabel(_ s: String) -> String {
         switch s {
         case "active": return "Active"
@@ -272,8 +249,6 @@ struct ListingCloudDetailView: View {
         }
     }
 }
-
-// MARK: - Remote hero image
 
 private struct ListingRemoteHeroImage: View {
     let urlString: String?

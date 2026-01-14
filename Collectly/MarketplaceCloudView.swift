@@ -21,6 +21,9 @@ struct MarketplaceCloudView: View {
     @AppStorage("marketplaceViewMode") private var viewModeRaw: String = ViewMode.grid.rawValue
     private var viewMode: ViewMode { ViewMode(rawValue: viewModeRaw) ?? .grid }
 
+    // ✅ NEW: sheet create (free listing)
+    @State private var showingCreate = false
+
     enum ViewMode: String { case list, grid }
 
     enum MarketFilter: String, CaseIterable, Identifiable {
@@ -68,6 +71,14 @@ struct MarketplaceCloudView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
+
+                    // ✅ NEW: Create free listing
+                    Button {
+                        showingCreate = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+
                     Button {
                         viewModeRaw = (viewMode == .grid) ? ViewMode.list.rawValue : ViewMode.grid.rawValue
                     } label: {
@@ -81,6 +92,11 @@ struct MarketplaceCloudView: View {
             }
             .onAppear { startListening() }
             .onDisappear { stopListening() }
+            .sheet(isPresented: $showingCreate) {
+                NavigationStack {
+                    CreateListingView(card: nil) // ✅ HYBRIDE: annonce libre
+                }
+            }
         }
     }
 

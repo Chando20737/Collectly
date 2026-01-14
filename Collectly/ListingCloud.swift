@@ -8,193 +8,162 @@ import Foundation
 import FirebaseFirestore
 import SwiftUI
 
-struct ListingCloud: Identifiable, Equatable {
+struct ListingCloud: Identifiable, Hashable {
 
-    // MARK: - Identité
+    // MARK: - Core
     let id: String
+    let sellerId: String
+    let sellerUsername: String?
+    let cardItemId: String
 
-    // MARK: - Propriétaire
-    var sellerId: String
-    var sellerUsername: String?
+    let title: String
+    let descriptionText: String?
 
-    // MARK: - Référence à ta carte locale
-    var cardItemId: String
+    // "fixedPrice" | "auction"
+    let type: String
 
-    // MARK: - Infos annonce
-    var title: String
-    var descriptionText: String?
+    // "active" | "paused" | "sold" | "ended"
+    let status: String
 
-    /// "fixedPrice" | "auction"
-    var type: String
+    // MARK: - Pricing
+    let buyNowPriceCAD: Double?
+    let startingBidCAD: Double?
+    let currentBidCAD: Double?
 
-    /// "active" | "paused" | "sold" | "ended"
-    var status: String
+    // MARK: - Auction
+    let bidCount: Int
+    let endDate: Date?
+    let lastBidderId: String?
+    let lastBidderUsername: String?
 
-    // MARK: - Médias
-    var imageUrl: String?
-
-    // MARK: - Prix / Encan
-    var buyNowPriceCAD: Double?
-    var startingBidCAD: Double?
-    var endDate: Date?
-    var currentBidCAD: Double?
-    var bidCount: Int
-
-    // ✅ Champs rapides de bids
-    var lastBidderId: String?
-    var lastBidderUsername: String?
-    var lastBidAt: Date?
-
-    // ✅ Résultat final (quand encan terminé)
-    var endedAt: Date?
-    var winnerId: String?
-    var winnerUsername: String?
-    var winningBidCAD: Double?
-
-    // MARK: - ✅ Grading
-    var isGraded: Bool?
-    var gradingCompany: String?
-    var gradeValue: String?
-    var certificationNumber: String?
+    // MARK: - Media
+    let imageUrl: String?
 
     // MARK: - Dates
-    var createdAt: Date
-    var updatedAt: Date?
+    let createdAt: Date
+    let updatedAt: Date?
 
-    // MARK: - Mapping
+    // MARK: - Grading
+    let isGraded: Bool?
+    let gradingCompany: String?
+    let gradeValue: String?
+    let certificationNumber: String?
 
-    static func fromFirestore(doc: DocumentSnapshot) -> ListingCloud {
-        let data = doc.data() ?? [:]
-        return fromData(docId: doc.documentID, data: data)
+    // MARK: - Hashable (id suffit)
+    static func == (lhs: ListingCloud, rhs: ListingCloud) -> Bool {
+        lhs.id == rhs.id
     }
 
-    static func fromData(docId: String, data: [String: Any]) -> ListingCloud {
-        func date(_ key: String) -> Date? {
-            (data[key] as? Timestamp)?.dateValue()
-        }
-
-        return ListingCloud(
-            id: docId,
-
-            sellerId: data["sellerId"] as? String ?? "",
-            sellerUsername: data["sellerUsername"] as? String,
-
-            cardItemId: data["cardItemId"] as? String ?? "",
-
-            title: data["title"] as? String ?? "Annonce",
-            descriptionText: data["descriptionText"] as? String,
-
-            type: data["type"] as? String ?? "fixedPrice",
-            status: data["status"] as? String ?? "active",
-
-            imageUrl: data["imageUrl"] as? String,
-
-            buyNowPriceCAD: data["buyNowPriceCAD"] as? Double,
-
-            startingBidCAD: data["startingBidCAD"] as? Double,
-            endDate: date("endDate"),
-            currentBidCAD: data["currentBidCAD"] as? Double,
-            bidCount: data["bidCount"] as? Int ?? 0,
-
-            lastBidderId: data["lastBidderId"] as? String,
-            lastBidderUsername: data["lastBidderUsername"] as? String,
-            lastBidAt: date("lastBidAt"),
-
-            endedAt: date("endedAt"),
-            winnerId: data["winnerId"] as? String,
-            winnerUsername: data["winnerUsername"] as? String,
-            winningBidCAD: data["winningBidCAD"] as? Double,
-
-            isGraded: data["isGraded"] as? Bool,
-            gradingCompany: data["gradingCompany"] as? String,
-            gradeValue: data["gradeValue"] as? String,
-            certificationNumber: data["certificationNumber"] as? String,
-
-            createdAt: date("createdAt") ?? Date(),
-            updatedAt: date("updatedAt")
-        )
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
     }
 
-    func toFirestore() -> [String: Any] {
-        var dict: [String: Any] = [
-            "sellerId": sellerId,
-            "cardItemId": cardItemId,
-            "title": title,
-            "type": type,
-            "status": status,
-            "createdAt": Timestamp(date: createdAt),
-            "updatedAt": Timestamp(date: updatedAt ?? Date()),
-            "bidCount": bidCount
-        ]
+    // MARK: - UI helpers
 
-        if let sellerUsername, !sellerUsername.isEmpty { dict["sellerUsername"] = sellerUsername }
-        if let descriptionText, !descriptionText.isEmpty { dict["descriptionText"] = descriptionText }
-        if let imageUrl, !imageUrl.isEmpty { dict["imageUrl"] = imageUrl }
-
-        if let buyNowPriceCAD { dict["buyNowPriceCAD"] = buyNowPriceCAD }
-        if let startingBidCAD { dict["startingBidCAD"] = startingBidCAD }
-        if let endDate { dict["endDate"] = Timestamp(date: endDate) }
-        if let currentBidCAD { dict["currentBidCAD"] = currentBidCAD }
-
-        if let lastBidderId { dict["lastBidderId"] = lastBidderId }
-        if let lastBidderUsername { dict["lastBidderUsername"] = lastBidderUsername }
-        if let lastBidAt { dict["lastBidAt"] = Timestamp(date: lastBidAt) }
-
-        if let endedAt { dict["endedAt"] = Timestamp(date: endedAt) }
-        if let winnerId { dict["winnerId"] = winnerId }
-        if let winnerUsername { dict["winnerUsername"] = winnerUsername }
-        if let winningBidCAD { dict["winningBidCAD"] = winningBidCAD }
-
-        if let isGraded { dict["isGraded"] = isGraded }
-        if let gradingCompany, !gradingCompany.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            dict["gradingCompany"] = gradingCompany
-        }
-        if let gradeValue, !gradeValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            dict["gradeValue"] = gradeValue
-        }
-        if let certificationNumber, !certificationNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            dict["certificationNumber"] = certificationNumber
-        }
-
-        return dict
+    var shouldShowGradingBadge: Bool {
+        let company = (gradingCompany ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let grade = (gradeValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return !(company.isEmpty && grade.isEmpty)
     }
-}
 
-// MARK: - UX Badges
+    var gradingLabel: String? {
+        let company = (gradingCompany ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let grade = (gradeValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
 
-extension ListingCloud {
+        if company.isEmpty && grade.isEmpty { return nil }
+        if company.isEmpty { return grade }
+        if grade.isEmpty { return company }
+        return "\(company) \(grade)"
+    }
 
+    /// Ce que tes vues utilisent : ListingBadgeView(text:, systemImage:, color:)
     var typeBadge: (text: String, icon: String, color: Color) {
-        if type == "fixedPrice" {
-            return ("Prix fixe", "tag.fill", .blue)
-        } else {
+        if type == "auction" {
             return ("Encan", "hammer.fill", .orange)
         }
+        return ("Acheter maintenant", "tag.fill", .blue)
     }
 
+    /// Badge de statut optionnel (ex: paused, sold, ended)
     var statusBadge: (text: String, icon: String, color: Color)? {
         switch status {
-        case "active":
-            return ("Active", "checkmark.circle.fill", .green)
         case "paused":
-            return ("En pause", "pause.circle.fill", .orange)
+            return ("En pause", "pause.circle.fill", .gray)
         case "sold":
-            return ("Vendue", "checkmark.seal.fill", .blue)
+            return ("Vendue", "checkmark.seal.fill", .purple)
         case "ended":
-            return ("Terminée", "flag.checkered", .gray)
+            return ("Terminée", "xmark.circle.fill", .red)
         default:
+            // active -> pas besoin de badge de statut supplémentaire (souvent déjà implicite)
             return nil
         }
     }
 
-    var gradingLabel: String? {
-        let g = gradeValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if g.isEmpty { return nil }
-        let c = gradingCompany?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return c.isEmpty ? g : "\(c) \(g)"
-    }
+    // MARK: - Firestore parsing
 
-    var shouldShowGradingBadge: Bool {
-        return gradingLabel != nil
+    static func fromFirestore(doc: DocumentSnapshot) -> ListingCloud {
+        let data = doc.data() ?? [:]
+
+        func str(_ key: String) -> String {
+            (data[key] as? String) ?? ""
+        }
+
+        func optStr(_ key: String) -> String? {
+            let v = (data[key] as? String) ?? ""
+            let t = v.trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : t
+        }
+
+        func optDouble(_ key: String) -> Double? {
+            if let d = data[key] as? Double { return d }
+            if let n = data[key] as? NSNumber { return n.doubleValue }
+            return nil
+        }
+
+        func optInt(_ key: String) -> Int? {
+            if let i = data[key] as? Int { return i }
+            if let n = data[key] as? NSNumber { return n.intValue }
+            return nil
+        }
+
+        func optDate(_ key: String) -> Date? {
+            if let ts = data[key] as? Timestamp { return ts.dateValue() }
+            return nil
+        }
+
+        let created = optDate("createdAt") ?? Date()
+        let updated = optDate("updatedAt")
+
+        return ListingCloud(
+            id: doc.documentID,
+            sellerId: str("sellerId"),
+            sellerUsername: optStr("sellerUsername"),
+            cardItemId: str("cardItemId"),
+
+            title: str("title"),
+            descriptionText: optStr("descriptionText"),
+
+            type: str("type"),
+            status: str("status"),
+
+            buyNowPriceCAD: optDouble("buyNowPriceCAD"),
+            startingBidCAD: optDouble("startingBidCAD"),
+            currentBidCAD: optDouble("currentBidCAD"),
+
+            bidCount: optInt("bidCount") ?? 0,
+            endDate: optDate("endDate"),
+            lastBidderId: optStr("lastBidderId"),
+            lastBidderUsername: optStr("lastBidderUsername"),
+
+            imageUrl: optStr("imageUrl"),
+
+            createdAt: created,
+            updatedAt: updated,
+
+            isGraded: (data["isGraded"] as? Bool),
+            gradingCompany: optStr("gradingCompany"),
+            gradeValue: optStr("gradeValue"),
+            certificationNumber: optStr("certificationNumber")
+        )
     }
 }

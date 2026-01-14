@@ -10,7 +10,8 @@ import SwiftData
 struct CreateListingView: View {
     @Environment(\.dismiss) private var dismiss
 
-    let card: CardItem
+    // ✅ HYBRIDE: carte optionnelle
+    let card: CardItem?
 
     private let maxTitleLength = 80
 
@@ -32,7 +33,11 @@ struct CreateListingView: View {
     @State private var isPublishing = false
     @State private var errorText: String?
 
+    // ✅ On garde ton service (pour annonces liées à une carte)
     private let marketplace = MarketplaceService()
+
+    // ✅ Repo (pour annonces libres)
+    private let repo = MarketplaceRepository()
 
     private var cleanTitle: String {
         title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -72,8 +77,46 @@ struct CreateListingView: View {
     private var previewBuyNow: Double? { (type == .fixedPrice) ? toDouble(buyNow) : nil }
     private var previewStartBid: Double? { (type == .auction) ? toDouble(startingBid) : nil }
 
+    // MARK: - UI helpers
+
+    private var linkedCardTitle: String? {
+        card?.title
+    }
+
+    private var linkedCardImageData: Data? {
+        card?.frontImageData
+    }
+
+    private var navTitle: String {
+        card == nil ? "Créer une annonce" : "Mettre en vente"
+    }
+
     var body: some View {
         Form {
+
+            // ✅ Si liée à une carte, on le montre clairement
+            if let c = card {
+                Section("Carte liée") {
+                    HStack(spacing: 12) {
+                        CardThumbnail(data: c.frontImageData)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(c.title)
+                                .font(.headline)
+                                .lineLimit(2)
+                            Text("Cette annonce sera liée à ta collection.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            } else {
+                Section("Annonce libre") {
+                    Text("Cette annonce n’est pas liée à une carte de ta collection.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             Section("Type") {
                 Picker("Type", selection: $type) {
@@ -133,7 +176,7 @@ struct CreateListingView: View {
 
             Section("Aperçu dans Marketplace") {
                 MarketplaceDraftPreviewRow(
-                    imageData: card.frontImageData,
+                    imageData: linkedCardImageData,
                     type: type,
                     title: cleanTitle,
                     buyNowPrice: previewBuyNow,
@@ -227,9 +270,12 @@ struct CreateListingView: View {
                 .disabled(isPublishing)
             }
         }
-        .navigationTitle("Créer une annonce")
+        .navigationTitle(navTitle)
         .onAppear {
-            if title.isEmpty { title = card.title }
+            // ✅ Préremplissage si carte liée
+            if title.isEmpty, let t = linkedCardTitle {
+                title = t
+            }
             if title.count > maxTitleLength {
                 title = String(title.prefix(maxTitleLength))
             }
@@ -282,15 +328,28 @@ struct CreateListingView: View {
 
         Task {
             do {
-                try await marketplace.createListingFromCollection(
-                    from: card,
-                    title: finalTitle,
-                    description: desc,
-                    type: type,
-                    buyNowPriceCAD: buyNowPrice,
-                    startingBidCAD: startBid,
-                    endDate: end
-                )
+                if let card {
+                    // ✅ FLOW EXISTANT: annonce liée à une carte (conserve ton upload / logique)
+                    try await marketplace.createListingFromCollection(
+                        from: card,
+                        title: finalTitle,
+                        description: desc,
+                        type: type,
+                        buyNowPriceCAD: buyNowPrice,
+                        startingBidCAD: startBid,
+                        endDate: end
+                    )
+                } else {
+                    // ✅ NOUVEAU: annonce libre (hybride)
+                    try await repo.createFreeListing(
+                        title: finalTitle,
+                        descriptionText: desc,
+                        type: type,
+                        buyNowPriceCAD: buyNowPrice,
+                        startingBidCAD: startBid,
+                        endDate: end
+                    )
+                }
 
                 await MainActor.run {
                     isPublishing = false

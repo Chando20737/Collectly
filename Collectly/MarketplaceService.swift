@@ -26,6 +26,9 @@ enum MarketplaceError: LocalizedError {
     case invalidUsernameFormat
     case missingAuctionEndDate
 
+    // ✅ Encans: minimum (8 heures)
+    case auctionDurationTooShort
+
     var errorDescription: String? {
         switch self {
         case .notSignedIn: return "Utilisateur non connecté."
@@ -42,6 +45,7 @@ enum MarketplaceError: LocalizedError {
         case .missingUsernameProfile: return "Ton profil n’a pas de nom d’utilisateur. Va dans Profil pour le créer."
         case .invalidUsernameFormat: return "Ton nom d’utilisateur est invalide. Utilise seulement lettres, chiffres et _. (Pas de point.)"
         case .missingAuctionEndDate: return "Un encan doit avoir une date de fin."
+        case .auctionDurationTooShort: return "Un encan doit durer au minimum 8 heures."
         }
     }
 }
@@ -51,11 +55,14 @@ final class MarketplaceService {
     private let db = Firestore.firestore()
     private let storage = Storage.storage()
 
-    // MARK: - PUBLIC API (Ce que tu appelles depuis l'app)
+    // ✅ Minimum d’un encan: 8h
+    private let minAuctionDurationSeconds: TimeInterval = 8 * 60 * 60
 
-    /// ✅ À appeler depuis "Ma collection" quand tu veux créer OU recréer une annonce.
-    /// - fixedPrice : réutilise l’ID legacy uid_cardId et relist si existant
-    /// - auction    : crée TOUJOURS un nouvel encan avec un ID uid_cardId_timestamp (donc recréation possible)
+    // ✅ Petit buffer pour éviter les micro-décalages d’horloge
+    private let driftBufferSeconds: TimeInterval = 120
+
+    // MARK: - PUBLIC API
+
     func createListingFromCollection(
         from card: CardItem,
         title: String,
@@ -72,9 +79,19 @@ final class MarketplaceService {
         guard cardItemId.count == 36 else { throw MarketplaceError.invalidCardId }
 
         if type == .auction {
-            // ✅ NOUVEL ID à chaque fois (recréation encan possible)
+
+            guard let endDate else { throw MarketplaceError.missingAuctionEndDate }
+
+            let now = Date()
+            // ✅ Minimum 8h + buffer
+            if endDate.timeIntervalSince(now) < (minAuctionDurationSeconds + driftBufferSeconds) {
+                throw MarketplaceError.auctionDurationTooShort
+            }
+
+            // ✅ NOUVEL ID à chaque fois
             let ts = Int(Date().timeIntervalSince1970)
             let listingId = "\(user.uid)_\(cardItemId)_\(ts)"
+
             try await createNewListingDoc(
                 listingId: listingId,
                 card: card,
@@ -85,10 +102,14 @@ final class MarketplaceService {
                 startingBidCAD: startingBidCAD,
                 endDate: endDate
             )
+
         } else {
-            // ✅ ID legacy (prix fixe): uid_cardId
+
+            // ✅ fixedPrice: doc legacy (uid_cardId)
+            // ✅ IMPORTANT: si le doc existe déjà et est "active", on UPDATE (plus d’erreur alreadyListed)
             let listingId = "\(user.uid)_\(cardItemId)"
-            try await createOrRelistFixedPriceLegacyDoc(
+
+            try await createOrUpdateFixedPriceLegacyDoc(
                 listingId: listingId,
                 card: card,
                 title: title,
@@ -98,13 +119,10 @@ final class MarketplaceService {
         }
     }
 
-    // MARK: - BUY NOW (✅ PATCH: buyerId + buyerUsername)
+    // MARK: - BUY NOW
 
     func buyNow(listingId: String) async throws {
         guard let user = Auth.auth().currentUser else { throw MarketplaceError.notSignedIn }
-
-        // ✅ Username du buyer (provient de /users/{uid}.username)
-        let buyerUsername = try await fetchCurrentUsernameOrThrow(uid: user.uid)
 
         let ref = db.collection("listings").document(listingId)
         let snap = try await ref.getDocument()
@@ -119,23 +137,17 @@ final class MarketplaceService {
         let type = (data["type"] as? String) ?? ""
         guard type == "fixedPrice" else { throw MarketplaceError.notFixedPrice }
 
-        // ✅ On écrit buyerId/buyerUsername pour les pushes / historique
         try await ref.updateData([
             "status": "sold",
-            "buyerId": user.uid,
-            "buyerUsername": buyerUsername,
             "updatedAt": Timestamp(date: Date())
         ])
     }
 
-    // MARK: - PLACE BID (✅ lastBidderId + lastBidderUsername)
+    // MARK: - PLACE BID
 
     func placeBid(listingId: String, bidCAD: Double) async throws {
         guard let user = Auth.auth().currentUser else { throw MarketplaceError.notSignedIn }
         guard bidCAD > 0 else { throw MarketplaceError.bidTooLow }
-
-        // ✅ IMPORTANT: on fetch le username AVANT la transaction
-        let bidderUsername = try await fetchCurrentUsernameOrThrow(uid: user.uid)
 
         let ref = db.collection("listings").document(listingId)
 
@@ -206,14 +218,16 @@ final class MarketplaceService {
 
                     let bidCount = (data["bidCount"] as? Int) ?? 0
                     let newBidCount = bidCount + 1
-                    let now = Timestamp(date: Date())
+
+                    let bidderUsername = (Auth.auth().currentUser?.displayName ?? "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
 
                     transaction.updateData([
                         "currentBidCAD": bidCAD,
                         "bidCount": newBidCount,
                         "lastBidderId": user.uid,
-                        "lastBidderUsername": bidderUsername,
-                        "updatedAt": now
+                        "lastBidderUsername": bidderUsername.isEmpty ? FieldValue.delete() : bidderUsername,
+                        "updatedAt": Timestamp(date: Date())
                     ], forDocument: ref)
 
                     return true
@@ -231,7 +245,7 @@ final class MarketplaceService {
         }
     }
 
-    // MARK: - UPDATE FIXED PRICE
+    // MARK: - UPDATE FIXED PRICE (optionnel, gardé)
 
     func updateFixedPriceListing(
         listingId: String,
@@ -254,15 +268,18 @@ final class MarketplaceService {
         let cleanTitle = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanDesc = newDescription?.trimmingCharacters(in: .whitespacesAndNewlines)
         let desc: String? = (cleanDesc?.isEmpty == true) ? nil : cleanDesc
+        let now = Timestamp(date: Date())
 
         var updates: [String: Any] = [
             "title": cleanTitle,
             "descriptionText": desc as Any,
-            "updatedAt": Timestamp(date: Date())
+            "updatedAt": now
         ]
 
         if let p = newBuyNowPriceCAD {
             updates["buyNowPriceCAD"] = p
+        } else {
+            updates["buyNowPriceCAD"] = FieldValue.delete()
         }
 
         try await docRef.updateData(updates)
@@ -288,8 +305,6 @@ final class MarketplaceService {
 
     // MARK: - END LISTINGS FOR CARD (delete CardItem)
 
-    /// ✅ IMPORTANT: comme on peut avoir plusieurs encans (IDs suffixés),
-    /// quand tu supprimes une carte, on termine TOUTES les annonces actives/paused pour cette cardItemId.
     func endListingIfExistsForDeletedCard(cardItemId: String) async {
         guard let user = Auth.auth().currentUser else { return }
 
@@ -311,7 +326,6 @@ final class MarketplaceService {
 
                 let type = (data["type"] as? String) ?? ""
 
-                // fixedPrice: active/paused
                 if type == "fixedPrice" {
                     if status == "active" || status == "paused" {
                         batch.updateData([
@@ -322,7 +336,6 @@ final class MarketplaceService {
                     }
                 }
 
-                // auction: seulement active ET bidCount == 0
                 if type == "auction" {
                     if status == "active" {
                         let bidCount = (data["bidCount"] as? Int) ?? 0
@@ -343,9 +356,13 @@ final class MarketplaceService {
         }
     }
 
-    // MARK: - INTERNALS (Create / Relist)
+    // MARK: - INTERNALS (Create / Update fixedPrice legacy)
 
-    private func createOrRelistFixedPriceLegacyDoc(
+    /// ✅ IMPORTANT:
+    /// - Si le doc n’existe pas → on le crée
+    /// - S’il existe → on UPDATE le contenu (même si status == "active")
+    ///   -> Ça règle “Cette carte est déjà en vente” quand tu modifies le prix.
+    private func createOrUpdateFixedPriceLegacyDoc(
         listingId: String,
         card: CardItem,
         title: String,
@@ -371,17 +388,25 @@ final class MarketplaceService {
             let sellerId = (data["sellerId"] as? String) ?? ""
             guard sellerId == user.uid else { throw MarketplaceError.notOwner }
 
-            let status = (data["status"] as? String) ?? ""
-            if status == "active" { throw MarketplaceError.alreadyListed }
-
             let type = (data["type"] as? String) ?? "fixedPrice"
             guard type == "fixedPrice" else { throw MarketplaceError.cannotEditNonFixedPrice }
+
+            // ✅ On accepte UPDATE même si status == "active"
+            //    (et on conserve status tel quel, sauf si c’était ended/sold -> on remet active)
+            let currentStatus = (data["status"] as? String) ?? "active"
+            let nextStatus: String
+            if currentStatus == "sold" || currentStatus == "ended" {
+                nextStatus = "active"
+            } else {
+                nextStatus = currentStatus // active / paused
+            }
 
             var updates: [String: Any] = [
                 "title": cleanTitle,
                 "descriptionText": desc as Any,
-                "status": "active",
-                "updatedAt": now
+                "updatedAt": now,
+                "sellerUsername": sellerUsername,
+                "status": nextStatus
             ]
 
             if let buyNowPriceCAD {
@@ -390,7 +415,6 @@ final class MarketplaceService {
                 updates["buyNowPriceCAD"] = FieldValue.delete()
             }
 
-            // refresh grading
             applyGradingUpdates(from: card, to: &updates)
 
             try await docRef.updateData(updates)
@@ -405,7 +429,7 @@ final class MarketplaceService {
             return
         }
 
-        // CREATE new fixedPrice legacy doc
+        // ✅ Création initiale
         var payload: [String: Any] = [
             "createdAt": now,
             "updatedAt": now,
@@ -473,6 +497,11 @@ final class MarketplaceService {
             if let buyNowPriceCAD { payload["buyNowPriceCAD"] = buyNowPriceCAD }
         } else {
             guard let endDate else { throw MarketplaceError.missingAuctionEndDate }
+
+            let nowDate = Date()
+            if endDate.timeIntervalSince(nowDate) < (minAuctionDurationSeconds + driftBufferSeconds) {
+                throw MarketplaceError.auctionDurationTooShort
+            }
 
             let start = startingBidCAD ?? 0
             payload["startingBidCAD"] = start
@@ -558,3 +587,4 @@ final class MarketplaceService {
         return url.absoluteString
     }
 }
+

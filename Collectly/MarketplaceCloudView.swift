@@ -171,7 +171,7 @@ struct MarketplaceCloudView: View {
         return Array(repeating: GridItem(.flexible(), spacing: spacing), count: count)
     }
 
-    // MARK: - LIST MODE (✅ inchangé)
+    // MARK: - LIST MODE
 
     private var listMode: some View {
         ScrollView {
@@ -224,12 +224,16 @@ struct MarketplaceCloudView: View {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
         return listings
+            // ✅ IMPORTANT: “paused” sort du Marketplace ici (et restera visible dans Mes annonces)
             .filter { $0.status == "active" }
             .filter { l in
                 switch filter {
-                case .all: return true
-                case .auctions: return l.type != "fixedPrice"
-                case .fixed: return l.type == "fixedPrice"
+                case .all:
+                    return true
+                case .auctions:
+                    return l.type == "auction"
+                case .fixed:
+                    return l.type == "fixedPrice"
                 }
             }
             .filter { l in
@@ -238,12 +242,12 @@ struct MarketplaceCloudView: View {
                 return hay.contains(q)
             }
             .sorted { a, b in
-                if a.type != b.type { return a.type != "fixedPrice" }
+                if a.type != b.type { return a.type == "auction" } // Encans en premier
                 return a.createdAt > b.createdAt
             }
     }
 
-    private var auctions: [ListingCloud] { filteredListings.filter { $0.type != "fixedPrice" } }
+    private var auctions: [ListingCloud] { filteredListings.filter { $0.type == "auction" } }
     private var fixedPrice: [ListingCloud] { filteredListings.filter { $0.type == "fixedPrice" } }
 
     // MARK: - Firestore
@@ -267,7 +271,7 @@ struct MarketplaceCloudView: View {
 }
 
 //
-// MARK: - LIST ROW (✅ inchangé)
+// MARK: - LIST ROW
 //
 
 private struct MarketplaceListRow: View {
@@ -340,7 +344,7 @@ private struct MarketplaceListRow: View {
 }
 
 //
-// MARK: - GRID CARD (✅ corrigé: badge rentré bas/gauche)
+// MARK: - GRID CARD
 //
 
 private struct MarketplaceGridCardDense: View {
@@ -408,7 +412,7 @@ private struct MarketplaceGridCardDense: View {
 
             if listing.shouldShowGradingBadge, let label = listing.gradingLabel {
                 GradingOverlayBadge(label: label, compact: false)
-                    .offset(badgeOffset) // ✅ (-4, +6)
+                    .offset(badgeOffset)
             }
         }
     }

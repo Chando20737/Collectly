@@ -14,12 +14,18 @@ struct CreateListingView: View {
 
     private let maxTitleLength = 80
 
+    // ✅ Minimum encan = 8 heures
+    private let minAuctionHours: Double = 8
+    private let defaultAuctionDays: Int = 3
+
     @State private var type: ListingType = .fixedPrice
     @State private var title: String = ""
     @State private var descriptionText: String = ""
 
     @State private var buyNow: String = ""
     @State private var startingBid: String = ""
+
+    // ✅ Valeur par défaut (3 jours)
     @State private var endDate: Date =
         Calendar.current.date(byAdding: .day, value: 3, to: Date()) ?? Date()
 
@@ -44,18 +50,41 @@ struct CreateListingView: View {
         !isPublishing && !cleanTitle.isEmpty && cleanTitle.count <= maxTitleLength
     }
 
+    // MARK: - Dates (Auction min)
+
+    private var minAuctionEndDate: Date {
+        Date().addingTimeInterval(minAuctionHours * 60 * 60)
+    }
+
+    private var minAuctionEndDateText: String {
+        minAuctionEndDate.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private func ensureAuctionEndDateIsValidIfNeeded() {
+        guard type == .auction else { return }
+        if endDate < minAuctionEndDate {
+            endDate = minAuctionEndDate
+        }
+    }
+
     // MARK: - Preview values
+
     private var previewBuyNow: Double? { (type == .fixedPrice) ? toDouble(buyNow) : nil }
     private var previewStartBid: Double? { (type == .auction) ? toDouble(startingBid) : nil }
 
     var body: some View {
         Form {
+
             Section("Type") {
                 Picker("Type", selection: $type) {
                     Text("Vente directe").tag(ListingType.fixedPrice)
                     Text("Encan").tag(ListingType.auction)
                 }
                 .pickerStyle(.segmented)
+                .onChange(of: type) { _, _ in
+                    // ✅ Si l’utilisateur bascule vers encan, on force un endDate valide
+                    ensureAuctionEndDateIsValidIfNeeded()
+                }
             }
 
             Section("Infos") {
@@ -102,7 +131,6 @@ struct CreateListingView: View {
                 }
             }
 
-            // ✅ Aperçu Marketplace (ligne “cliquable” + placeholder titre)
             Section("Aperçu dans Marketplace") {
                 MarketplaceDraftPreviewRow(
                     imageData: card.frontImageData,
@@ -122,17 +150,57 @@ struct CreateListingView: View {
 
             Section(type == .fixedPrice ? "Prix (vente directe)" : "Encan") {
                 if type == .fixedPrice {
+
                     TextField("Prix (CAD)", text: $buyNow)
                         .keyboardType(.decimalPad)
 
                     Text("Ex: 25")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+
                 } else {
+
                     TextField("Mise de départ (CAD)", text: $startingBid)
                         .keyboardType(.decimalPad)
 
-                    DatePicker("Fin", selection: $endDate, displayedComponents: [.date, .hourAndMinute])
+                    // ✅ UX: rappel du minimum + raccourci 24h
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Image(systemName: "clock")
+                                .foregroundStyle(.secondary)
+                            Text("Minimum: 8 heures (à partir de maintenant)")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                        }
+
+                        HStack(spacing: 10) {
+                            Button("Mettre +24 h") {
+                                endDate = Date().addingTimeInterval(24 * 60 * 60)
+                                ensureAuctionEndDateIsValidIfNeeded()
+                            }
+                            .font(.footnote.weight(.semibold))
+
+                            Spacer()
+
+                            Text("Min: \(minAuctionEndDateText)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 4)
+
+                    // ✅ DatePicker avec minDate = now + 8h
+                    DatePicker(
+                        "Fin",
+                        selection: $endDate,
+                        in: minAuctionEndDate...,
+                        displayedComponents: [.date, .hourAndMinute]
+                    )
+                    .onChange(of: endDate) { _, _ in
+                        // Double sécurité (même si DatePicker empêche déjà)
+                        ensureAuctionEndDateIsValidIfNeeded()
+                    }
 
                     Text("La date de fin ne pourra plus être modifiée après publication.")
                         .font(.footnote)
@@ -165,6 +233,7 @@ struct CreateListingView: View {
             if title.count > maxTitleLength {
                 title = String(title.prefix(maxTitleLength))
             }
+            ensureAuctionEndDateIsValidIfNeeded()
         }
     }
 
@@ -193,8 +262,11 @@ struct CreateListingView: View {
                 errorText = "Entre une mise de départ valide (ex: 10)."
                 return
             }
-            if endDate <= Date() {
-                errorText = "La fin de l’encan doit être dans le futur."
+
+            // ✅ Validation UX: minimum 8h
+            if endDate < minAuctionEndDate {
+                errorText = "Un encan doit durer au moins 8 heures."
+                endDate = minAuctionEndDate
                 return
             }
         }
@@ -210,10 +282,6 @@ struct CreateListingView: View {
 
         Task {
             do {
-                // ✅ IMPORTANT:
-                // - fixedPrice: relist/update doc legacy uid_cardId
-                // - auction: crée TOUJOURS un nouveau doc uid_cardId_timestamp (recréation possible)
-                // - et comme ce code est dans "Ma collection", ça respecte ton besoin
                 try await marketplace.createListingFromCollection(
                     from: card,
                     title: finalTitle,
@@ -377,3 +445,4 @@ private struct MarketplaceDraftPreviewRow: View {
         return "\(max(m, 1)) min"
     }
 }
+

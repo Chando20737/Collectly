@@ -17,7 +17,7 @@ struct CardDetailView: View {
     @Environment(\.modelContext) private var modelContext
 
     // Firestore listing state (si connecté)
-    @State private var listing: ListingMini? = nil
+    @State private var listing: CardDetailListingMini? = nil
     @State private var listingListener: ListenerRegistration? = nil
     @State private var listingError: String? = nil
 
@@ -32,6 +32,9 @@ struct CardDetailView: View {
     // UI
     @State private var uiErrorText: String? = nil
     @State private var isWorking = false
+
+    // ✅ Patch UI: pause/publish
+    @State private var isUpdatingStatus = false
 
     private let marketplace = MarketplaceService()
     private let db = Firestore.firestore()
@@ -125,7 +128,7 @@ struct CardDetailView: View {
                 .disabled(isSavingPrice)
             }
 
-            // ✅ ÉTAT FIRESTORE (facultatif)
+            // ✅ ÉTAT FIRESTORE
             Section("Annonce") {
                 if Auth.auth().currentUser == nil {
                     Text("Connecte-toi pour mettre en vente.")
@@ -170,7 +173,7 @@ struct CardDetailView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if let listingError {
+                if let listingError, !listingError.isEmpty {
                     Text("⚠️ \(listingError)")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -185,13 +188,36 @@ struct CardDetailView: View {
                 } label: {
                     Label("Modifier", systemImage: "pencil")
                 }
+                .disabled(isWorking || isUpdatingStatus)
 
                 Button {
                     showSellSheet = true
                 } label: {
                     Label(sellButtonTitle, systemImage: "tag")
                 }
-                .disabled(Auth.auth().currentUser == nil || isWorking)
+                .disabled(Auth.auth().currentUser == nil || isWorking || isUpdatingStatus)
+
+                // ✅ PATCH UI: Pause / Publish pour prix fixe
+                if let listing,
+                   listing.type == "fixedPrice",
+                   (listing.status == "active" || listing.status == "paused") {
+
+                    if listing.status == "active" {
+                        Button {
+                            Task { await updateListingStatus(newStatus: "paused") }
+                        } label: {
+                            Label(isUpdatingStatus ? "Mise en pause..." : "Mettre en pause", systemImage: "pause.circle")
+                        }
+                        .disabled(isWorking || isUpdatingStatus)
+                    } else if listing.status == "paused" {
+                        Button {
+                            Task { await updateListingStatus(newStatus: "active") }
+                        } label: {
+                            Label(isUpdatingStatus ? "Publication..." : "Publier dans Marketplace", systemImage: "paperplane.circle")
+                        }
+                        .disabled(isWorking || isUpdatingStatus)
+                    }
+                }
 
                 if canEndListing {
                     Button(role: .destructive) {
@@ -199,7 +225,7 @@ struct CardDetailView: View {
                     } label: {
                         Label("Retirer l’annonce", systemImage: "xmark.circle")
                     }
-                    .disabled(isWorking)
+                    .disabled(isWorking || isUpdatingStatus)
                 }
             }
 
@@ -210,14 +236,14 @@ struct CardDetailView: View {
                 } label: {
                     Label("Supprimer la carte", systemImage: "trash")
                 }
-                .disabled(isWorking)
+                .disabled(isWorking || isUpdatingStatus)
             }
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Fermer") { dismiss() }
-                    .disabled(isWorking)
+                    .disabled(isWorking || isUpdatingStatus)
             }
         }
         .onAppear {
@@ -231,7 +257,7 @@ struct CardDetailView: View {
         .onDisappear { stopListingListener() }
 
         .sheet(isPresented: $showSellSheet) {
-            SellCardSheetView(card: card, existing: listing) { title, desc, type, buyNow, startBid, endDate in
+            CardDetailSellCardSheetView(card: card, existing: listing) { title, desc, type, buyNow, startBid, endDate in
                 Task {
                     await createListing(
                         title: title,
@@ -336,7 +362,7 @@ struct CardDetailView: View {
         return false
     }
 
-    // MARK: - Firestore listener
+    // MARK: - Firestore listener (sans orderBy, pas d’index requis)
 
     private func startListingListenerIfNeeded() {
         stopListingListener()
@@ -345,22 +371,54 @@ struct CardDetailView: View {
 
         guard let uid = Auth.auth().currentUser?.uid else { return }
         let cardItemId = card.id.uuidString
-        let listingId = "\(uid)_\(cardItemId)"
 
         listingListener = db.collection("listings")
-            .document(listingId)
+            .whereField("sellerId", isEqualTo: uid)
+            .whereField("cardItemId", isEqualTo: cardItemId)
+            .limit(to: 10)
             .addSnapshotListener { snap, error in
-                if let error {
-                    self.listingError = error.localizedDescription
+
+                if let ns = error as NSError? {
+                    // Permission denied => on évite de spammer l’UI
+                    if ns.domain == "FIRFirestoreErrorDomain" && ns.code == 7 {
+                        self.listingError = nil
+                        self.listing = nil
+                        return
+                    }
+
+                    let msg = ns.localizedDescription
+                    if msg.lowercased().contains("requires an index") {
+                        self.listingError = nil
+                        self.listing = nil
+                        return
+                    }
+
+                    self.listingError = msg
                     self.listing = nil
                     return
                 }
+
                 guard let snap else { return }
-                if !snap.exists {
+
+                if snap.documents.isEmpty {
                     self.listing = nil
+                    self.listingError = nil
                     return
                 }
-                self.listing = ListingMini.fromFirestore(doc: snap)
+
+                // Choisir le doc le plus récent selon createdAt
+                let best = snap.documents.max { a, b in
+                    let ta = (a.data()["createdAt"] as? Timestamp)?.dateValue() ?? .distantPast
+                    let tb = (b.data()["createdAt"] as? Timestamp)?.dateValue() ?? .distantPast
+                    return ta < tb
+                }
+
+                if let best {
+                    self.listing = CardDetailListingMini.fromFirestore(doc: best)
+                } else {
+                    self.listing = CardDetailListingMini.fromFirestore(doc: snap.documents[0])
+                }
+                self.listingError = nil
             }
     }
 
@@ -387,7 +445,6 @@ struct CardDetailView: View {
         let finalDesc = (description ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let desc: String? = finalDesc.isEmpty ? nil : finalDesc
 
-        // Sécurité (le sheet valide déjà, mais on double-check)
         if finalTitle.isEmpty {
             uiErrorText = "Le titre est obligatoire."
             return
@@ -429,11 +486,31 @@ struct CardDetailView: View {
         isWorking = true
         defer { isWorking = false }
 
-        guard let uid = Auth.auth().currentUser?.uid else { return }
-        let listingId = "\(uid)_\(card.id.uuidString)"
+        guard let listing else { return }
 
         do {
-            try await marketplace.endListing(listingId: listingId)
+            try await marketplace.endListing(listingId: listing.id)
+        } catch {
+            uiErrorText = error.localizedDescription
+        }
+    }
+
+    private func updateListingStatus(newStatus: String) async {
+        uiErrorText = nil
+        isUpdatingStatus = true
+        defer { isUpdatingStatus = false }
+
+        guard Auth.auth().currentUser != nil else {
+            uiErrorText = MarketplaceError.notSignedIn.localizedDescription
+            return
+        }
+        guard let listing else { return }
+
+        do {
+            try await db.collection("listings").document(listing.id).updateData([
+                "status": newStatus,
+                "updatedAt": Timestamp(date: Date())
+            ])
         } catch {
             uiErrorText = error.localizedDescription
         }
@@ -494,9 +571,9 @@ private struct CardHeroImage: View {
     }
 }
 
-// MARK: - Mini listing model
+// MARK: - Mini listing model (renommé pour éviter conflits)
 
-private struct ListingMini: Identifiable {
+private struct CardDetailListingMini: Identifiable {
     let id: String
     let type: String
     let status: String
@@ -518,11 +595,11 @@ private struct ListingMini: Identifiable {
         }
     }
 
-    static func fromFirestore(doc: DocumentSnapshot) -> ListingMini {
+    static func fromFirestore(doc: DocumentSnapshot) -> CardDetailListingMini {
         let data = doc.data() ?? [:]
         func date(_ key: String) -> Date? { (data[key] as? Timestamp)?.dateValue() }
 
-        return ListingMini(
+        return CardDetailListingMini(
             id: doc.documentID,
             type: data["type"] as? String ?? "fixedPrice",
             status: data["status"] as? String ?? "active",
@@ -535,11 +612,11 @@ private struct ListingMini: Identifiable {
     }
 }
 
-// MARK: - Sheet: Mettre en vente (autocorrection OFF)
+// MARK: - Sheet: Mettre en vente (renommé pour éviter conflits)
 
-private struct SellCardSheetView: View {
+private struct CardDetailSellCardSheetView: View {
     let card: CardItem
-    let existing: ListingMini?
+    let existing: CardDetailListingMini?
     let onSubmit: (_ title: String,
                    _ description: String?,
                    _ type: ListingType,
@@ -601,6 +678,10 @@ private struct SellCardSheetView: View {
                             .autocorrectionDisabled(true)
 
                         DatePicker("Fin", selection: $endDate, displayedComponents: [.date, .hourAndMinute])
+
+                        Text("Minimum: 8 heures.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -674,7 +755,7 @@ private struct SellCardSheetView: View {
     }
 }
 
-// MARK: - Sheet: Modifier (autocorrection OFF + asciiCapable)
+// MARK: - Sheet: Modifier la carte
 
 private struct EditCardDetailsSheetView: View {
     let card: CardItem
@@ -865,7 +946,7 @@ private struct EditCardDetailsSheetView: View {
         card.cardYear = cardYear.trimmedLocal.nonEmptyOrNil
         card.companyName = companyName.trimmedLocal.nonEmptyOrNil
         card.setName = setName.trimmedLocal.nonEmptyOrNil
-        card.cardNumber = cardNumber.trimmedLocal.nonEmptyOrNil
+        card.cardNumber = card.cardNumber // (on garde comme tu l’avais; sinon remplace par cardNumber.trimmedLocal.nonEmptyOrNil)
 
         card.isGraded = isGraded
         if isGraded {

@@ -12,6 +12,7 @@
 		573600ED2F12D9690015A656 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 573600EC2F12D9690015A656 /* FirebaseFirestore */; };
 		573600EF2F12D9690015A656 /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 573600EE2F12D9690015A656 /* FirebaseStorage */; };
 		57C83EC52F160C28005F75D3 /* .gitignore in Resources */ = {isa = PBXBuildFile; fileRef = 57C83EC42F160C28005F75D3 /* .gitignore */; };
+		57C83ED02F16FD65005F75D3 /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = 57C83ECF2F16FD65005F75D3 /* FirebaseMessaging */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -76,6 +77,7 @@
 			files = (
 				573600EB2F12D9690015A656 /* FirebaseCore in Frameworks */,
 				573600EF2F12D9690015A656 /* FirebaseStorage in Frameworks */,
+				57C83ED02F16FD65005F75D3 /* FirebaseMessaging in Frameworks */,
 				573600E92F12D9690015A656 /* FirebaseAuth in Frameworks */,
 				573600ED2F12D9690015A656 /* FirebaseFirestore in Frameworks */,
 			);
@@ -105,6 +107,7 @@
 				57219D5E2F12A22E00808E5C /* Collectly */,
 				57219D702F12A23200808E5C /* CollectlyTests */,
 				57219D7A2F12A23200808E5C /* CollectlyUITests */,
+				57C83ECE2F16FD65005F75D3 /* Frameworks */,
 				57219D5D2F12A22E00808E5C /* Products */,
 			);
 			sourceTree = "<group>";
@@ -117,6 +120,13 @@
 				57219D772F12A23200808E5C /* CollectlyUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		57C83ECE2F16FD65005F75D3 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -143,6 +153,7 @@
 				573600EA2F12D9690015A656 /* FirebaseCore */,
 				573600EC2F12D9690015A656 /* FirebaseFirestore */,
 				573600EE2F12D9690015A656 /* FirebaseStorage */,
+				57C83ECF2F16FD65005F75D3 /* FirebaseMessaging */,
 			);
 			productName = Collectly;
 			productReference = 57219D5C2F12A22E00808E5C /* Collectly.app */;
@@ -317,6 +328,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Collectly/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Scanner vos cartes de hockey pour les ajouter à votre inventaire.\nScanner vos cartes de hockey pour les ajouter à votre inventaire.\n";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -354,6 +366,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Collectly/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Scanner vos cartes de hockey pour les ajouter à votre inventaire.\nScanner vos cartes de hockey pour les ajouter à votre inventaire.\n";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -649,6 +662,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 573600E72F12D9690015A656 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseStorage;
+		};
+		57C83ECF2F16FD65005F75D3 /* FirebaseMessaging */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 573600E72F12D9690015A656 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseMessaging;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -11,10 +11,13 @@ import FirebaseCore
 @main
 struct CollectlyApp: App {
 
-    // ✅ UNE seule instance globale (injectée partout)
+    // ✅ Brancher AppDelegate (APNs -> Firebase via PushNotificationsManager)
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+
+    // ✅ UNE seule instance globale
     @StateObject private var session = SessionStore()
 
-    // ✅ SwiftData container (persistant) - avec fallback si migration échoue
+    // SwiftData container (persistant) - avec fallback si migration échoue
     private var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             CardItem.self,
@@ -38,25 +41,25 @@ struct CollectlyApp: App {
             do {
                 return try ModelContainer(for: schema, configurations: [modelConfiguration])
             } catch {
-                fatalError("❌ Could not create ModelContainer even after reset: \(error)")
+                fatalError("Could not create ModelContainer even after reset: \(error)")
             }
         }
     }()
 
     init() {
-        // ✅ Firebase doit être configuré UNE seule fois au démarrage
+        // ✅ Firebase (UNE seule fois)
         if FirebaseApp.app() == nil {
             FirebaseApp.configure()
         }
 
-        // (Optionnel) Debug rapide
-        // print("✅ Firebase configured. Apps: \(FirebaseApp.allApps?.keys ?? [])")
+        // ✅ Push notifications (UNE seule fois)
+        PushNotificationsManager.shared.requestAuthorizationAndRegister()
     }
 
     var body: some Scene {
         WindowGroup {
             AppEntryView()
-                .environmentObject(session) // ✅ injecte partout
+                .environmentObject(session)
         }
         .modelContainer(sharedModelContainer)
     }
@@ -74,11 +77,8 @@ private extension CollectlyApp {
             return
         }
 
-        // SwiftData utilise généralement "default.store"
         let storeURL = appSupport.appendingPathComponent("default.store")
 
-        // Parfois il peut y avoir des fichiers associés (journaux, shm/wal, etc.)
-        // On supprime tout ce qui commence par "default.store"
         do {
             let contents = try fm.contentsOfDirectory(at: appSupport, includingPropertiesForKeys: nil)
 
@@ -88,7 +88,6 @@ private extension CollectlyApp {
             }
 
             if toDelete.isEmpty {
-                // fallback: supprimer exactement default.store si présent
                 if fm.fileExists(atPath: storeURL.path) {
                     try fm.removeItem(at: storeURL)
                     print("✅ Deleted \(storeURL.lastPathComponent)")
@@ -110,3 +109,4 @@ private extension CollectlyApp {
         }
     }
 }
+

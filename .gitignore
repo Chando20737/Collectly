@@ -4,20 +4,52 @@
 //
 //  Created by Eric Chandonnet on 2026-01-12.
 //
+# ======================
 # Xcode
+# ======================
 DerivedData/
 *.xcuserstate
 *.xccheckout
 *.xcscmblueprint
 *.xcuserdata/
+*.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings
+*.xcarchive
 
+# ======================
 # macOS
+# ======================
 .DS_Store
 
-# SwiftPM
+# ======================
+# Swift Package Manager
+# ======================
 .build/
 .swiftpm/
 
+# ======================
+# Firebase / Secrets
+# ======================
+GoogleService-Info.plist
+*.pem
+*.p12
+*.cer
+*.mobileprovision
+
+# ======================
+# Node / Firebase Functions
+# ======================
+functions/node_modules/
+functions/.firebase/
+functions/.env
+npm-debug.log*
+yarn-error.log*
+
+# ======================
 # Logs
+# ======================
 *.log
 
+# ======================
+# Misc
+# ======================
+.env

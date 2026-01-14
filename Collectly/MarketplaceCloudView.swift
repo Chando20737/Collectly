@@ -18,6 +18,10 @@ struct MarketplaceCloudView: View {
     @State private var query: String = ""
     @State private var filter: MarketFilter = .all
 
+    // ✅ NEW: tri
+    @AppStorage("marketplaceSortMode") private var sortRaw: String = SortMode.defaultSoonestFirst.rawValue
+    private var sortMode: SortMode { SortMode(rawValue: sortRaw) ?? .defaultSoonestFirst }
+
     @AppStorage("marketplaceViewMode") private var viewModeRaw: String = ViewMode.grid.rawValue
     private var viewMode: ViewMode { ViewMode(rawValue: viewModeRaw) ?? .grid }
 
@@ -27,6 +31,17 @@ struct MarketplaceCloudView: View {
         case all = "Tous"
         case auctions = "Encans"
         case fixed = "Acheter maintenant"
+        var id: String { rawValue }
+    }
+
+    // ✅ NEW: options de tri
+    enum SortMode: String, CaseIterable, Identifiable {
+        case defaultSoonestFirst = "Par défaut (fin bientôt d’abord)"
+        case newest = "Plus récents"
+        case priceLow = "Prix / mise: ↑"
+        case priceHigh = "Prix / mise: ↓"
+        case endingSoon = "Fin bientôt (encans)"
+
         var id: String { rawValue }
     }
 
@@ -47,7 +62,7 @@ struct MarketplaceCloudView: View {
                             systemImage: "exclamationmark.triangle",
                             description: Text(errorText)
                         )
-                    } else if filteredListings.isEmpty {
+                    } else if sortedFilteredListings.isEmpty {
                         ContentUnavailableView(
                             "Aucune annonce",
                             systemImage: "tag",
@@ -67,6 +82,24 @@ struct MarketplaceCloudView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
+
+                    // ✅ NEW: menu tri
+                    Menu {
+                        ForEach(SortMode.allCases) { m in
+                            Button {
+                                sortRaw = m.rawValue
+                            } label: {
+                                if sortMode == m {
+                                    Label(m.rawValue, systemImage: "checkmark")
+                                } else {
+                                    Text(m.rawValue)
+                                }
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down")
+                    }
+
                     Button {
                         viewModeRaw = (viewMode == .grid) ? ViewMode.list.rawValue : ViewMode.grid.rawValue
                     } label: {
@@ -125,11 +158,51 @@ struct MarketplaceCloudView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
 
-                    if !auctions.isEmpty {
-                        sectionHeader(title: "Encans", count: auctions.count, icon: "hammer.fill")
+                    // ✅ Sections: on respecte le filtre + tri (mais on garde 2 sections si "Tous")
+                    if filter == .all {
+                        let a = sortedAuctions
+                        let f = sortedFixedPrice
 
+                        if !a.isEmpty {
+                            sectionHeader(title: "Encans", count: a.count, icon: "hammer.fill")
+                            LazyVGrid(columns: cols, spacing: 10) {
+                                ForEach(a) { listing in
+                                    NavigationLink {
+                                        ListingCloudDetailView(listing: listing)
+                                    } label: {
+                                        MarketplaceGridCardDense(
+                                            listing: listing,
+                                            badgeOffset: gridBadgeOffset,
+                                            miseText: miseText
+                                        )
+                                    }
+                                    .buttonStyle(GridPressableLinkStyle())
+                                }
+                            }
+                        }
+
+                        if !f.isEmpty {
+                            sectionHeader(title: "Acheter maintenant", count: f.count, icon: "tag.fill")
+                            LazyVGrid(columns: cols, spacing: 10) {
+                                ForEach(f) { listing in
+                                    NavigationLink {
+                                        ListingCloudDetailView(listing: listing)
+                                    } label: {
+                                        MarketplaceGridCardDense(
+                                            listing: listing,
+                                            badgeOffset: gridBadgeOffset,
+                                            miseText: miseText
+                                        )
+                                    }
+                                    .buttonStyle(GridPressableLinkStyle())
+                                }
+                            }
+                        }
+
+                    } else {
+                        // Encans ou Prix fixe seulement => une liste unique triée
                         LazyVGrid(columns: cols, spacing: 10) {
-                            ForEach(auctions) { listing in
+                            ForEach(sortedFilteredListings) { listing in
                                 NavigationLink {
                                     ListingCloudDetailView(listing: listing)
                                 } label: {
@@ -142,25 +215,7 @@ struct MarketplaceCloudView: View {
                                 .buttonStyle(GridPressableLinkStyle())
                             }
                         }
-                    }
-
-                    if !fixedPrice.isEmpty {
-                        sectionHeader(title: "Acheter maintenant", count: fixedPrice.count, icon: "tag.fill")
-
-                        LazyVGrid(columns: cols, spacing: 10) {
-                            ForEach(fixedPrice) { listing in
-                                NavigationLink {
-                                    ListingCloudDetailView(listing: listing)
-                                } label: {
-                                    MarketplaceGridCardDense(
-                                        listing: listing,
-                                        badgeOffset: gridBadgeOffset,
-                                        miseText: miseText
-                                    )
-                                }
-                                .buttonStyle(GridPressableLinkStyle())
-                            }
-                        }
+                        .padding(.top, 4)
                     }
 
                     Spacer(minLength: 10)
@@ -184,21 +239,36 @@ struct MarketplaceCloudView: View {
         ScrollView {
             LazyVStack(spacing: 10) {
 
-                if !auctions.isEmpty {
-                    sectionHeader(title: "Encans", count: auctions.count, icon: "hammer.fill")
-                    ForEach(auctions) { listing in
-                        NavigationLink {
-                            ListingCloudDetailView(listing: listing)
-                        } label: {
-                            MarketplaceListRow(listing: listing, miseText: miseText)
-                        }
-                        .buttonStyle(ListPressableLinkStyle())
-                    }
-                }
+                if filter == .all {
+                    let a = sortedAuctions
+                    let f = sortedFixedPrice
 
-                if !fixedPrice.isEmpty {
-                    sectionHeader(title: "Acheter maintenant", count: fixedPrice.count, icon: "tag.fill")
-                    ForEach(fixedPrice) { listing in
+                    if !a.isEmpty {
+                        sectionHeader(title: "Encans", count: a.count, icon: "hammer.fill")
+                        ForEach(a) { listing in
+                            NavigationLink {
+                                ListingCloudDetailView(listing: listing)
+                            } label: {
+                                MarketplaceListRow(listing: listing, miseText: miseText)
+                            }
+                            .buttonStyle(ListPressableLinkStyle())
+                        }
+                    }
+
+                    if !f.isEmpty {
+                        sectionHeader(title: "Acheter maintenant", count: f.count, icon: "tag.fill")
+                        ForEach(f) { listing in
+                            NavigationLink {
+                                ListingCloudDetailView(listing: listing)
+                            } label: {
+                                MarketplaceListRow(listing: listing, miseText: miseText)
+                            }
+                            .buttonStyle(ListPressableLinkStyle())
+                        }
+                    }
+
+                } else {
+                    ForEach(sortedFilteredListings) { listing in
                         NavigationLink {
                             ListingCloudDetailView(listing: listing)
                         } label: {
@@ -225,21 +295,18 @@ struct MarketplaceCloudView: View {
         .padding(.top, 2)
     }
 
-    // MARK: - Filtering
+    // MARK: - Filtering + Sorting
 
-    private var filteredListings: [ListingCloud] {
+    private var baseFiltered: [ListingCloud] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
         return listings
             .filter { $0.status == "active" }
             .filter { l in
                 switch filter {
-                case .all:
-                    return true
-                case .auctions:
-                    return l.type == "auction"
-                case .fixed:
-                    return l.type == "fixedPrice"
+                case .all: return true
+                case .auctions: return l.type == "auction"
+                case .fixed: return l.type == "fixedPrice"
                 }
             }
             .filter { l in
@@ -247,14 +314,90 @@ struct MarketplaceCloudView: View {
                 let hay = (l.title + " " + (l.descriptionText ?? "")).lowercased()
                 return hay.contains(q)
             }
-            .sorted { a, b in
-                if a.type != b.type { return a.type == "auction" }
-                return a.createdAt > b.createdAt
-            }
     }
 
-    private var auctions: [ListingCloud] { filteredListings.filter { $0.type == "auction" } }
-    private var fixedPrice: [ListingCloud] { filteredListings.filter { $0.type == "fixedPrice" } }
+    private var sortedFilteredListings: [ListingCloud] {
+        sort(list: baseFiltered, mode: sortMode)
+    }
+
+    // ✅ Pour les sections quand filtre == .all
+    private var sortedAuctions: [ListingCloud] {
+        sort(list: baseFiltered.filter { $0.type == "auction" }, mode: sortMode)
+    }
+
+    private var sortedFixedPrice: [ListingCloud] {
+        sort(list: baseFiltered.filter { $0.type == "fixedPrice" }, mode: sortMode)
+    }
+
+    private func sort(list: [ListingCloud], mode: SortMode) -> [ListingCloud] {
+        switch mode {
+
+        // ✅ DEFAULT demandé:
+        // 1) Encans fin bientôt (endDate la plus proche)
+        // 2) Autres encans (createdAt desc)
+        // 3) Prix fixe (createdAt desc)
+        case .defaultSoonestFirst:
+            return list.sorted { a, b in
+                // Encans avant fixed
+                if a.type != b.type { return a.type == "auction" }
+
+                // Dans encans: fin la plus proche d'abord (si endDate)
+                if a.type == "auction" && b.type == "auction" {
+                    let da = a.endDate ?? .distantFuture
+                    let db = b.endDate ?? .distantFuture
+                    if da != db { return da < db }
+                    return a.createdAt > b.createdAt
+                }
+
+                // Dans fixed: plus récents
+                return a.createdAt > b.createdAt
+            }
+
+        case .endingSoon:
+            // Encans uniquement: fin la plus proche d'abord; sinon on garde la logique stable
+            return list.sorted { a, b in
+                let aIsAuction = (a.type == "auction")
+                let bIsAuction = (b.type == "auction")
+                if aIsAuction != bIsAuction { return aIsAuction } // encans avant fixed
+
+                if aIsAuction && bIsAuction {
+                    let da = a.endDate ?? .distantFuture
+                    let db = b.endDate ?? .distantFuture
+                    if da != db { return da < db }
+                    return a.createdAt > b.createdAt
+                }
+
+                return a.createdAt > b.createdAt
+            }
+
+        case .newest:
+            return list.sorted { $0.createdAt > $1.createdAt }
+
+        case .priceLow:
+            return list.sorted { a, b in
+                let pa = priceValue(for: a)
+                let pb = priceValue(for: b)
+                if pa != pb { return pa < pb }
+                return a.createdAt > b.createdAt
+            }
+
+        case .priceHigh:
+            return list.sorted { a, b in
+                let pa = priceValue(for: a)
+                let pb = priceValue(for: b)
+                if pa != pb { return pa > pb }
+                return a.createdAt > b.createdAt
+            }
+        }
+    }
+
+    private func priceValue(for listing: ListingCloud) -> Double {
+        if listing.type == "fixedPrice" {
+            return listing.buyNowPriceCAD ?? 0
+        } else {
+            return listing.currentBidCAD ?? listing.startingBidCAD ?? 0
+        }
+    }
 
     // MARK: - Firestore
 
@@ -290,16 +433,34 @@ private struct MarketplaceListRow: View {
     let listing: ListingCloud
     let miseText: (Int) -> String
 
+    private let endingSoonThreshold: TimeInterval = 24 * 60 * 60
+
+    private var isEndingSoon: Bool {
+        guard listing.type == "auction" else { return false }
+        guard listing.status == "active" else { return false }
+        guard let end = listing.endDate else { return false }
+        let remaining = end.timeIntervalSinceNow
+        return remaining > 0 && remaining <= endingSoonThreshold
+    }
+
     var body: some View {
         HStack(spacing: 12) {
 
             ZStack(alignment: .topTrailing) {
                 MarketplaceSlabThumb(urlString: listing.imageUrl, size: CGSize(width: 78, height: 112))
+                    .zIndex(0)
 
-                if listing.shouldShowGradingBadge, let label = listing.gradingLabel {
-                    GradingOverlayBadge(label: label, compact: true)
-                        .offset(x: 8, y: -8)
+                VStack(alignment: .trailing, spacing: 6) {
+                    if listing.shouldShowGradingBadge, let label = listing.gradingLabel {
+                        GradingOverlayBadge(label: label, compact: true)
+                    }
+                    if isEndingSoon {
+                        EndingSoonBadge(compact: true)
+                    }
                 }
+                .padding(.top, 6)
+                .padding(.trailing, 6)
+                .zIndex(10)
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -365,13 +526,37 @@ private struct MarketplaceGridCardDense: View {
     let badgeOffset: CGSize
     let miseText: (Int) -> String
 
+    private let endingSoonThreshold: TimeInterval = 24 * 60 * 60
+
+    private var isEndingSoon: Bool {
+        guard listing.type == "auction" else { return false }
+        guard listing.status == "active" else { return false }
+        guard let end = listing.endDate else { return false }
+        let remaining = end.timeIntervalSinceNow
+        return remaining > 0 && remaining <= endingSoonThreshold
+    }
+
     var body: some View {
         ZStack(alignment: .topTrailing) {
-
             VStack(alignment: .leading, spacing: 6) {
 
-                MarketplaceSlabThumb(urlString: listing.imageUrl, size: CGSize(width: 999, height: 190))
-                    .frame(height: 190)
+                ZStack(alignment: .topTrailing) {
+                    MarketplaceSlabThumb(urlString: listing.imageUrl, size: CGSize(width: 999, height: 190))
+                        .frame(height: 190)
+                        .zIndex(0)
+
+                    VStack(alignment: .trailing, spacing: 6) {
+                        if listing.shouldShowGradingBadge, let label = listing.gradingLabel {
+                            GradingOverlayBadge(label: label, compact: false)
+                        }
+                        if isEndingSoon {
+                            EndingSoonBadge(compact: false)
+                        }
+                    }
+                    .padding(.top, 8)
+                    .padding(.trailing, 8)
+                    .zIndex(10)
+                }
 
                 Text(listing.title)
                     .font(.subheadline.weight(.semibold))
@@ -423,11 +608,6 @@ private struct MarketplaceGridCardDense: View {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(Color(.secondarySystemGroupedBackground))
             )
-
-            if listing.shouldShowGradingBadge, let label = listing.gradingLabel {
-                GradingOverlayBadge(label: label, compact: false)
-                    .offset(badgeOffset)
-            }
         }
     }
 }
@@ -473,6 +653,36 @@ private struct MarketplaceSlabThumb: View {
         }
         .frame(width: size.width == 999 ? nil : size.width, height: size.height)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+//
+// MARK: - Ending Soon Badge (opaque)
+//
+
+private struct EndingSoonBadge: View {
+    let compact: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "clock.fill")
+                .font(.caption2)
+            Text("Se termine bientôt")
+                .font((compact ? Font.caption2 : Font.caption).weight(.semibold))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, compact ? 8 : 10)
+        .padding(.vertical, compact ? 5 : 6)
+        .background(
+            Capsule()
+                .fill(Color(.systemBackground).opacity(0.92))
+        )
+        .overlay(
+            Capsule()
+                .stroke(Color.orange.opacity(0.75), lineWidth: 1)
+        )
+        .foregroundStyle(Color.orange)
+        .shadow(color: Color.black.opacity(0.10), radius: 2, x: 0, y: 1)
     }
 }
 

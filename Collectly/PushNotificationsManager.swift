@@ -5,32 +5,41 @@
 //  Created by Eric Chandonnet on 2026-01-13.
 //
 import Foundation
-import FirebaseMessaging
 import FirebaseAuth
 import FirebaseFirestore
 import UserNotifications
 import UIKit
 
+@MainActor
 final class PushNotificationsManager: NSObject {
 
     static let shared = PushNotificationsManager()
+
+    // weak pour éviter un cycle mémoire (router est un EnvironmentObject)
+    private weak var router: DeepLinkRouter?
 
     private override init() {
         super.init()
     }
 
-    // MARK: - Public
+    // MARK: - Router
 
-    /// À appeler au démarrage de l'app (après FirebaseApp.configure()).
+    /// Injecté dès que ton router existe (CollectlyApp.onAppear)
+    func attachRouter(_ router: DeepLinkRouter) {
+        self.router = router
+        print("✅ PushNotificationsManager: router attached")
+    }
+
+    // MARK: - Permission + Register
+
+    /// Demande la permission et enregistre auprès d'APNs.
+    /// Le token APNs arrive dans AppDelegate.didRegisterForRemoteNotificationsWithDeviceToken
     func requestAuthorizationAndRegister() {
-        UNUserNotificationCenter.current().delegate = self
-        Messaging.messaging().delegate = self
-
         UNUserNotificationCenter.current().requestAuthorization(
             options: [.alert, .badge, .sound]
         ) { granted, error in
             if let error {
-                print("❌ Push permission error:", error.localizedDescription)
+                print("❌ Notification permission error:", error.localizedDescription)
             } else {
                 print("🔔 Push permission granted:", granted)
             }
@@ -41,17 +50,25 @@ final class PushNotificationsManager: NSObject {
         }
     }
 
-    /// Appelé par AppDelegate quand Firebase donne/rafraîchit le token FCM.
+    // MARK: - Token FCM -> Firestore
+
+    /// Appelé depuis AppDelegate.messaging(_:didReceiveRegistrationToken:)
     func handleNewFCMToken(_ token: String) {
-        print("📲 FCM token:", token)
-        saveTokenToFirestore(token)
+        let t = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else {
+            print("⚠️ PushNotificationsManager: received empty FCM token")
+            return
+        }
+
+        // Firestore peut prendre un peu de temps → on évite de bloquer le MainActor
+        Task {
+            await saveTokenToFirestore(t)
+        }
     }
 
-    // MARK: - Save token
-
-    private func saveTokenToFirestore(_ token: String) {
+    private func saveTokenToFirestore(_ token: String) async {
         guard let uid = Auth.auth().currentUser?.uid else {
-            print("⚠️ Not signed in; cannot save FCM token.")
+            print("ℹ️ FCM token received but user is not signed in yet (not saving).")
             return
         }
 
@@ -61,34 +78,29 @@ final class PushNotificationsManager: NSObject {
             "updatedAt": Timestamp(date: Date())
         ]
 
-        Firestore.firestore()
-            .collection("users")
-            .document(uid)
-            .setData(data, merge: true)
+        do {
+            try await Firestore.firestore()
+                .collection("users")
+                .document(uid)
+                .setData(data, merge: true)
 
-        print("✅ FCM token saved in /users/\(uid)")
+            print("✅ FCM token saved in /users/\(uid)")
+        } catch {
+            print("❌ Failed to save FCM token in /users/\(uid):", error.localizedDescription)
+        }
     }
-}
 
-// MARK: - MessagingDelegate
+    // MARK: - Tap on Notification -> Deep link
 
-extension PushNotificationsManager: MessagingDelegate {
-    func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
-        guard let token = fcmToken, !token.isEmpty else {
-            print("⚠️ FCM token is nil/empty")
+    /// Appelé depuis AppDelegate.userNotificationCenter(_:didReceive:)
+    func handleNotificationTap(_ userInfo: [AnyHashable: Any]) {
+        print("📩 PushNotificationsManager.handleNotificationTap userInfo =", userInfo)
+
+        guard let router else {
+            print("⚠️ PushNotificationsManager: router is nil (attachRouter not called yet)")
             return
         }
-        handleNewFCMToken(token)
-    }
-}
 
-// MARK: - UNUserNotificationCenterDelegate
-
-extension PushNotificationsManager: UNUserNotificationCenterDelegate {
-    func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification
-    ) async -> UNNotificationPresentationOptions {
-        return [.banner, .sound, .badge]
+        router.handleNotificationUserInfo(userInfo)
     }
 }

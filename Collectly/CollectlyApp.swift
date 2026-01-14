@@ -6,18 +6,18 @@
 //
 import SwiftUI
 import SwiftData
-import FirebaseCore
 
 @main
 struct CollectlyApp: App {
 
-    // ✅ Brancher AppDelegate (APNs -> Firebase via PushNotificationsManager)
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
-    // ✅ UNE seule instance globale
     @StateObject private var session = SessionStore()
+    @StateObject private var router = DeepLinkRouter()
 
-    // SwiftData container (persistant) - avec fallback si migration échoue
+    // ✅ Pour éviter d'exécuter 2x le setup push si onAppear est rappelé
+    @State private var didSetupPush = false
+
     private var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             CardItem.self,
@@ -29,13 +29,10 @@ struct CollectlyApp: App {
             isStoredInMemoryOnly: false
         )
 
-        // 1) Tentative normale
         do {
             return try ModelContainer(for: schema, configurations: [modelConfiguration])
         } catch {
-            // 2) Si migration échoue, on supprime le store et on retente
             print("⚠️ SwiftData container load failed. Attempting reset. Error: \(error)")
-
             Self.deleteDefaultSwiftDataStoreFiles()
 
             do {
@@ -46,26 +43,23 @@ struct CollectlyApp: App {
         }
     }()
 
-    init() {
-        // ✅ Firebase (UNE seule fois)
-        if FirebaseApp.app() == nil {
-            FirebaseApp.configure()
-        }
-
-        // ✅ Push notifications (UNE seule fois)
-        PushNotificationsManager.shared.requestAuthorizationAndRegister()
-    }
-
     var body: some Scene {
         WindowGroup {
             AppEntryView()
                 .environmentObject(session)
+                .environmentObject(router)
+                .onAppear {
+                    // ✅ Setup push une seule fois
+                    guard !didSetupPush else { return }
+                    didSetupPush = true
+
+                    PushNotificationsManager.shared.attachRouter(router)
+                    PushNotificationsManager.shared.requestAuthorizationAndRegister()
+                }
         }
         .modelContainer(sharedModelContainer)
     }
 }
-
-// MARK: - Reset store helper (si migration impossible)
 
 private extension CollectlyApp {
 
@@ -77,8 +71,6 @@ private extension CollectlyApp {
             return
         }
 
-        let storeURL = appSupport.appendingPathComponent("default.store")
-
         do {
             let contents = try fm.contentsOfDirectory(at: appSupport, includingPropertiesForKeys: nil)
 
@@ -87,26 +79,14 @@ private extension CollectlyApp {
                 || url.lastPathComponent == "default.store"
             }
 
-            if toDelete.isEmpty {
-                if fm.fileExists(atPath: storeURL.path) {
-                    try fm.removeItem(at: storeURL)
-                    print("✅ Deleted \(storeURL.lastPathComponent)")
-                } else {
-                    print("ℹ️ No SwiftData default.store found to delete.")
-                }
-                return
-            }
-
             for url in toDelete {
                 if fm.fileExists(atPath: url.path) {
                     try fm.removeItem(at: url)
                     print("✅ Deleted \(url.lastPathComponent)")
                 }
             }
-
         } catch {
             print("⚠️ Failed to delete SwiftData store files: \(error)")
         }
     }
 }
-

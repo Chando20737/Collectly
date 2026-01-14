@@ -98,10 +98,13 @@ final class MarketplaceService {
         }
     }
 
-    // MARK: - BUY NOW
+    // MARK: - BUY NOW (✅ PATCH: buyerId + buyerUsername)
 
     func buyNow(listingId: String) async throws {
         guard let user = Auth.auth().currentUser else { throw MarketplaceError.notSignedIn }
+
+        // ✅ Username du buyer (provient de /users/{uid}.username)
+        let buyerUsername = try await fetchCurrentUsernameOrThrow(uid: user.uid)
 
         let ref = db.collection("listings").document(listingId)
         let snap = try await ref.getDocument()
@@ -116,17 +119,23 @@ final class MarketplaceService {
         let type = (data["type"] as? String) ?? ""
         guard type == "fixedPrice" else { throw MarketplaceError.notFixedPrice }
 
+        // ✅ On écrit buyerId/buyerUsername pour les pushes / historique
         try await ref.updateData([
             "status": "sold",
+            "buyerId": user.uid,
+            "buyerUsername": buyerUsername,
             "updatedAt": Timestamp(date: Date())
         ])
     }
 
-    // MARK: - PLACE BID (✅ ajoute lastBidderId)
+    // MARK: - PLACE BID (✅ lastBidderId + lastBidderUsername)
 
     func placeBid(listingId: String, bidCAD: Double) async throws {
         guard let user = Auth.auth().currentUser else { throw MarketplaceError.notSignedIn }
         guard bidCAD > 0 else { throw MarketplaceError.bidTooLow }
+
+        // ✅ IMPORTANT: on fetch le username AVANT la transaction
+        let bidderUsername = try await fetchCurrentUsernameOrThrow(uid: user.uid)
 
         let ref = db.collection("listings").document(listingId)
 
@@ -197,12 +206,14 @@ final class MarketplaceService {
 
                     let bidCount = (data["bidCount"] as? Int) ?? 0
                     let newBidCount = bidCount + 1
+                    let now = Timestamp(date: Date())
 
                     transaction.updateData([
                         "currentBidCAD": bidCAD,
                         "bidCount": newBidCount,
-                        "lastBidderId": user.uid,              // ✅ NOUVEAU
-                        "updatedAt": Timestamp(date: Date())
+                        "lastBidderId": user.uid,
+                        "lastBidderUsername": bidderUsername,
+                        "updatedAt": now
                     ], forDocument: ref)
 
                     return true
@@ -467,9 +478,6 @@ final class MarketplaceService {
             payload["startingBidCAD"] = start
             payload["currentBidCAD"] = start
             payload["endDate"] = Timestamp(date: endDate)
-
-            // (optionnel) init lastBidderId absent tant qu’aucune mise
-            // payload["lastBidderId"] = FieldValue.delete() // pas nécessaire
         }
 
         applyGradingPayload(from: card, to: &payload)

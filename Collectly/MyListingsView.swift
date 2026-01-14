@@ -68,6 +68,12 @@ struct MyListingsView: View {
         )
     }
 
+    // MARK: - FR plural (0 et 1 -> singulier)
+
+    private func misesText(_ count: Int) -> String {
+        return count <= 1 ? "\(count) mise" : "\(count) mises"
+    }
+
     // MARK: - UI
 
     var body: some View {
@@ -261,6 +267,7 @@ struct MyListingsView: View {
                             MyListingGridCard(
                                 listing: listing,
                                 isWorking: isWorking,
+                                misesText: misesText,
                                 onOpen: { selectedListing = listing },
                                 onTogglePause: { Task { await togglePauseResume(listing) } },
                                 onEnd: { confirmEnd = listing },
@@ -285,6 +292,7 @@ struct MyListingsView: View {
                             MyListingGridCard(
                                 listing: listing,
                                 isWorking: isWorking,
+                                misesText: misesText,
                                 onOpen: { selectedListing = listing },
                                 onTogglePause: { Task { await togglePauseResume(listing) } },
                                 onEnd: { confirmEnd = listing },
@@ -323,6 +331,7 @@ struct MyListingsView: View {
                         MyListingListRow(
                             listing: listing,
                             isWorking: isWorking,
+                            misesText: misesText,
                             onOpen: { selectedListing = listing },
                             onTogglePause: { Task { await togglePauseResume(listing) } },
                             onEnd: { confirmEnd = listing },
@@ -338,6 +347,7 @@ struct MyListingsView: View {
                         MyListingListRow(
                             listing: listing,
                             isWorking: isWorking,
+                            misesText: misesText,
                             onOpen: { selectedListing = listing },
                             onTogglePause: { Task { await togglePauseResume(listing) } },
                             onEnd: { confirmEnd = listing },
@@ -491,6 +501,7 @@ struct MyListingsView: View {
 private struct MyListingGridCard: View {
     let listing: ListingCloud
     let isWorking: Bool
+    let misesText: (Int) -> String
 
     let onOpen: () -> Void
     let onTogglePause: () -> Void
@@ -623,8 +634,10 @@ private struct MyListingGridCard: View {
                         .opacity(isPaused ? 0.7 : 1)
                 }
             } else {
-                let current = listing.currentBidCAD ?? listing.startingBidCAD ?? 0
-                Text(String(format: "Mise: %.0f $ CAD • %d mises", current, listing.bidCount))
+                let currentBid = listing.currentBidCAD ?? listing.startingBidCAD ?? 0
+                let countText = misesText(listing.bidCount)
+
+                Text(String(format: "Mise: %.0f $ CAD • %@", currentBid, countText))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .opacity(isPaused ? 0.7 : 1)
@@ -653,6 +666,7 @@ private struct MyListingGridCard: View {
 private struct MyListingListRow: View {
     let listing: ListingCloud
     let isWorking: Bool
+    let misesText: (Int) -> String
 
     let onOpen: () -> Void
     let onTogglePause: () -> Void
@@ -731,8 +745,10 @@ private struct MyListingListRow: View {
                             .opacity(isPaused ? 0.7 : 1)
                     }
                 } else {
-                    let current = listing.currentBidCAD ?? listing.startingBidCAD ?? 0
-                    Text(String(format: "Mise: %.0f $ CAD • %d mises", current, listing.bidCount))
+                    let currentBid = listing.currentBidCAD ?? listing.startingBidCAD ?? 0
+                    let countText = misesText(listing.bidCount)
+
+                    Text(String(format: "Mise: %.0f $ CAD • %@", currentBid, countText))
                         .foregroundStyle(.secondary)
                         .opacity(isPaused ? 0.7 : 1)
 

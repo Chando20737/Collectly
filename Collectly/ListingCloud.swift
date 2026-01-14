@@ -19,22 +19,20 @@ struct ListingCloud: Identifiable, Hashable {
     let title: String
     let descriptionText: String?
 
-    // "fixedPrice" | "auction"
+    /// "fixedPrice" | "auction"
     let type: String
 
-    // "active" | "paused" | "sold" | "ended"
+    /// "active" | "paused" | "sold" | "ended"
     let status: String
 
     // MARK: - Pricing
-    let buyNowPriceCAD: Double?
-    let startingBidCAD: Double?
-    let currentBidCAD: Double?
+    let buyNowPriceCAD: Double?          // fixedPrice
+    let startingBidCAD: Double?          // auction
+    let currentBidCAD: Double?           // auction
+    let bidCount: Int                   // auction
 
     // MARK: - Auction
-    let bidCount: Int
     let endDate: Date?
-    let lastBidderId: String?
-    let lastBidderUsername: String?
 
     // MARK: - Media
     let imageUrl: String?
@@ -43,60 +41,60 @@ struct ListingCloud: Identifiable, Hashable {
     let createdAt: Date
     let updatedAt: Date?
 
+    // MARK: - Bids meta
+    let lastBidderId: String?
+    let lastBidderUsername: String?
+
     // MARK: - Grading
-    let isGraded: Bool?
+    let isGraded: Bool
     let gradingCompany: String?
     let gradeValue: String?
     let certificationNumber: String?
 
-    // MARK: - Hashable (id suffit)
-    static func == (lhs: ListingCloud, rhs: ListingCloud) -> Bool {
-        lhs.id == rhs.id
-    }
-
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-    }
-
     // MARK: - UI helpers
 
-    var shouldShowGradingBadge: Bool {
-        let company = (gradingCompany ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let grade = (gradeValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return !(company.isEmpty && grade.isEmpty)
+    struct Badge: Hashable {
+        let text: String
+        let icon: String
+        let color: Color
+    }
+
+    var typeBadge: Badge {
+        if type == "auction" {
+            return Badge(text: "Encan", icon: "hammer.fill", color: .orange)
+        } else {
+            return Badge(text: "Acheter maintenant", icon: "tag.fill", color: .blue)
+        }
+    }
+
+    var statusBadge: Badge? {
+        switch status {
+        case "active":
+            return Badge(text: "Active", icon: "checkmark.circle.fill", color: .green)
+        case "paused":
+            return Badge(text: "En pause", icon: "pause.circle.fill", color: .gray)
+        case "sold":
+            return Badge(text: "Vendue", icon: "checkmark.seal.fill", color: .purple)
+        case "ended":
+            return Badge(text: "Terminée", icon: "xmark.circle.fill", color: .red)
+        default:
+            return nil
+        }
     }
 
     var gradingLabel: String? {
-        let company = (gradingCompany ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let comp = (gradingCompany ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let grade = (gradeValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if company.isEmpty && grade.isEmpty { return nil }
-        if company.isEmpty { return grade }
-        if grade.isEmpty { return company }
-        return "\(company) \(grade)"
+        if !comp.isEmpty && !grade.isEmpty {
+            return "\(comp) \(grade)"
+        }
+        if !grade.isEmpty { return grade }
+        return nil
     }
 
-    /// Ce que tes vues utilisent : ListingBadgeView(text:, systemImage:, color:)
-    var typeBadge: (text: String, icon: String, color: Color) {
-        if type == "auction" {
-            return ("Encan", "hammer.fill", .orange)
-        }
-        return ("Acheter maintenant", "tag.fill", .blue)
-    }
-
-    /// Badge de statut optionnel (ex: paused, sold, ended)
-    var statusBadge: (text: String, icon: String, color: Color)? {
-        switch status {
-        case "paused":
-            return ("En pause", "pause.circle.fill", .gray)
-        case "sold":
-            return ("Vendue", "checkmark.seal.fill", .purple)
-        case "ended":
-            return ("Terminée", "xmark.circle.fill", .red)
-        default:
-            // active -> pas besoin de badge de statut supplémentaire (souvent déjà implicite)
-            return nil
-        }
+    var shouldShowGradingBadge: Bool {
+        isGraded && (gradingLabel?.isEmpty == false)
     }
 
     // MARK: - Firestore parsing
@@ -104,66 +102,66 @@ struct ListingCloud: Identifiable, Hashable {
     static func fromFirestore(doc: DocumentSnapshot) -> ListingCloud {
         let data = doc.data() ?? [:]
 
-        func str(_ key: String) -> String {
-            (data[key] as? String) ?? ""
-        }
+        let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(timeIntervalSince1970: 0)
+        let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue()
 
-        func optStr(_ key: String) -> String? {
-            let v = (data[key] as? String) ?? ""
-            let t = v.trimmingCharacters(in: .whitespacesAndNewlines)
-            return t.isEmpty ? nil : t
-        }
+        let endDate = (data["endDate"] as? Timestamp)?.dateValue()
 
-        func optDouble(_ key: String) -> Double? {
-            if let d = data[key] as? Double { return d }
-            if let n = data[key] as? NSNumber { return n.doubleValue }
-            return nil
-        }
+        // ✅ Robust number casts
+        let bidCount = readInt(data["bidCount"]) ?? 0
+        let buyNow = readDouble(data["buyNowPriceCAD"])
+        let starting = readDouble(data["startingBidCAD"])
+        let current = readDouble(data["currentBidCAD"])
 
-        func optInt(_ key: String) -> Int? {
-            if let i = data[key] as? Int { return i }
-            if let n = data[key] as? NSNumber { return n.intValue }
-            return nil
-        }
-
-        func optDate(_ key: String) -> Date? {
-            if let ts = data[key] as? Timestamp { return ts.dateValue() }
-            return nil
-        }
-
-        let created = optDate("createdAt") ?? Date()
-        let updated = optDate("updatedAt")
+        let isGraded = (data["isGraded"] as? Bool) ?? false
 
         return ListingCloud(
             id: doc.documentID,
-            sellerId: str("sellerId"),
-            sellerUsername: optStr("sellerUsername"),
-            cardItemId: str("cardItemId"),
+            sellerId: (data["sellerId"] as? String) ?? "",
+            sellerUsername: data["sellerUsername"] as? String,
+            cardItemId: (data["cardItemId"] as? String) ?? "",
 
-            title: str("title"),
-            descriptionText: optStr("descriptionText"),
+            title: (data["title"] as? String) ?? "",
+            descriptionText: data["descriptionText"] as? String,
 
-            type: str("type"),
-            status: str("status"),
+            type: (data["type"] as? String) ?? "fixedPrice",
+            status: (data["status"] as? String) ?? "active",
 
-            buyNowPriceCAD: optDouble("buyNowPriceCAD"),
-            startingBidCAD: optDouble("startingBidCAD"),
-            currentBidCAD: optDouble("currentBidCAD"),
+            buyNowPriceCAD: buyNow,
+            startingBidCAD: starting,
+            currentBidCAD: current,
+            bidCount: bidCount,
 
-            bidCount: optInt("bidCount") ?? 0,
-            endDate: optDate("endDate"),
-            lastBidderId: optStr("lastBidderId"),
-            lastBidderUsername: optStr("lastBidderUsername"),
+            endDate: endDate,
 
-            imageUrl: optStr("imageUrl"),
+            imageUrl: data["imageUrl"] as? String,
 
-            createdAt: created,
-            updatedAt: updated,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
 
-            isGraded: (data["isGraded"] as? Bool),
-            gradingCompany: optStr("gradingCompany"),
-            gradeValue: optStr("gradeValue"),
-            certificationNumber: optStr("certificationNumber")
+            lastBidderId: data["lastBidderId"] as? String,
+            lastBidderUsername: data["lastBidderUsername"] as? String,
+
+            isGraded: isGraded,
+            gradingCompany: data["gradingCompany"] as? String,
+            gradeValue: data["gradeValue"] as? String,
+            certificationNumber: data["certificationNumber"] as? String
         )
+    }
+
+    private static func readInt(_ any: Any?) -> Int? {
+        if let i = any as? Int { return i }
+        if let i64 = any as? Int64 { return Int(i64) }
+        if let n = any as? NSNumber { return n.intValue }
+        if let d = any as? Double { return Int(d) }
+        return nil
+    }
+
+    private static func readDouble(_ any: Any?) -> Double? {
+        if let d = any as? Double { return d }
+        if let i = any as? Int { return Double(i) }
+        if let i64 = any as? Int64 { return Double(i64) }
+        if let n = any as? NSNumber { return n.doubleValue }
+        return nil
     }
 }

@@ -26,9 +26,13 @@ struct CreateListingView: View {
     @State private var buyNow: String = ""
     @State private var startingBid: String = ""
 
-    // ✅ Valeur par défaut (3 jours)
+    // ✅ Date/Time encan (géré via pickers custom)
     @State private var endDate: Date =
         Calendar.current.date(byAdding: .day, value: 3, to: Date()) ?? Date()
+
+    @State private var endDateOnly: Date = Date()
+    @State private var endHour: Int = Calendar.current.component(.hour, from: Date())
+    @State private var endMinuteIndex: Int = 0 // 0->00, 1->15, 2->30, 3->45
 
     @State private var isPublishing = false
     @State private var errorText: String?
@@ -38,6 +42,9 @@ struct CreateListingView: View {
 
     // ✅ Repo (pour annonces libres)
     private let repo = MarketplaceRepository()
+
+    // Minutes autorisées
+    private let quarterMinutes: [Int] = [0, 15, 30, 45]
 
     private var cleanTitle: String {
         title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -68,7 +75,7 @@ struct CreateListingView: View {
     private func ensureAuctionEndDateIsValidIfNeeded() {
         guard type == .auction else { return }
         if endDate < minAuctionEndDate {
-            endDate = minAuctionEndDate
+            setEndDate(minAuctionEndDate)
         }
     }
 
@@ -89,6 +96,49 @@ struct CreateListingView: View {
 
     private var navTitle: String {
         card == nil ? "Créer une annonce" : "Mettre en vente"
+    }
+
+    // MARK: - End date helpers (date + hour + quarter minute)
+
+    private func roundedToQuarter(_ date: Date) -> Date {
+        let cal = Calendar.current
+        var comps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        let m = comps.minute ?? 0
+        let rounded = [0, 15, 30, 45].min(by: { abs($0 - m) < abs($1 - m) }) ?? 0
+        comps.minute = rounded
+        comps.second = 0
+        return cal.date(from: comps) ?? date
+    }
+
+    private func setEndDate(_ date: Date) {
+        let cal = Calendar.current
+        let d = roundedToQuarter(date)
+        endDate = d
+
+        // synchroniser les pickers
+        endDateOnly = cal.startOfDay(for: d)
+        endHour = cal.component(.hour, from: d)
+        let m = cal.component(.minute, from: d)
+        endMinuteIndex = quarterMinutes.firstIndex(of: m) ?? 0
+    }
+
+    private func rebuildEndDateFromPickers() {
+        let cal = Calendar.current
+        let base = endDateOnly
+        let minute = quarterMinutes[safe: endMinuteIndex] ?? 0
+
+        var comps = cal.dateComponents([.year, .month, .day], from: base)
+        comps.hour = endHour
+        comps.minute = minute
+        comps.second = 0
+
+        let rebuilt = cal.date(from: comps) ?? endDate
+        endDate = rebuilt
+
+        // clamp min 8h
+        if type == .auction, endDate < minAuctionEndDate {
+            setEndDate(minAuctionEndDate)
+        }
     }
 
     var body: some View {
@@ -206,7 +256,6 @@ struct CreateListingView: View {
                     TextField("Mise de départ (CAD)", text: $startingBid)
                         .keyboardType(.decimalPad)
 
-                    // ✅ UX: rappel du minimum + raccourci 24h
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Image(systemName: "clock")
@@ -219,8 +268,7 @@ struct CreateListingView: View {
 
                         HStack(spacing: 10) {
                             Button("Mettre +24 h") {
-                                endDate = Date().addingTimeInterval(24 * 60 * 60)
-                                ensureAuctionEndDateIsValidIfNeeded()
+                                setEndDate(Date().addingTimeInterval(24 * 60 * 60))
                             }
                             .font(.footnote.weight(.semibold))
 
@@ -233,16 +281,59 @@ struct CreateListingView: View {
                     }
                     .padding(.vertical, 4)
 
-                    // ✅ DatePicker avec minDate = now + 8h
-                    DatePicker(
-                        "Fin",
-                        selection: $endDate,
-                        in: minAuctionEndDate...,
-                        displayedComponents: [.date, .hourAndMinute]
-                    )
-                    .onChange(of: endDate) { _, _ in
-                        // Double sécurité (même si DatePicker empêche déjà)
-                        ensureAuctionEndDateIsValidIfNeeded()
+                    // ✅ Date + heure + minutes (00/15/30/45)
+                    Section {
+                        // Date (jour seulement)
+                        DatePicker(
+                            "Fin (date)",
+                            selection: $endDateOnly,
+                            in: Calendar.current.startOfDay(for: minAuctionEndDate)...,
+                            displayedComponents: [.date]
+                        )
+                        .onChange(of: endDateOnly) { _, _ in
+                            rebuildEndDateFromPickers()
+                        }
+
+                        // Heure + Minutes (quarter)
+                        HStack {
+                            Text("Heure")
+                            Spacer()
+                            Picker("Heure", selection: $endHour) {
+                                ForEach(0..<24, id: \.self) { h in
+                                    Text(String(format: "%02d", h)).tag(h)
+                                }
+                            }
+                            .pickerStyle(.wheel)
+                            .frame(width: 90, height: 110)
+                            .clipped()
+                            .onChange(of: endHour) { _, _ in
+                                rebuildEndDateFromPickers()
+                            }
+
+                            Text(":")
+                                .font(.headline)
+                                .foregroundStyle(.secondary)
+
+                            Picker("Minutes", selection: $endMinuteIndex) {
+                                ForEach(0..<quarterMinutes.count, id: \.self) { idx in
+                                    Text(String(format: "%02d", quarterMinutes[idx])).tag(idx)
+                                }
+                            }
+                            .pickerStyle(.wheel)
+                            .frame(width: 90, height: 110)
+                            .clipped()
+                            .onChange(of: endMinuteIndex) { _, _ in
+                                rebuildEndDateFromPickers()
+                            }
+                        }
+
+                        // Résumé
+                        HStack {
+                            Text("Fin")
+                            Spacer()
+                            Text(endDate.formatted(date: .abbreviated, time: .shortened))
+                                .foregroundStyle(.secondary)
+                        }
                     }
 
                     Text("La date de fin ne pourra plus être modifiée après publication.")
@@ -279,7 +370,19 @@ struct CreateListingView: View {
             if title.count > maxTitleLength {
                 title = String(title.prefix(maxTitleLength))
             }
+
+            // ✅ init picker state à partir de endDate (arrondi au quart d’heure)
+            setEndDate(endDate)
+
+            // ✅ clamp si encan
             ensureAuctionEndDateIsValidIfNeeded()
+            setEndDate(endDate)
+        }
+        .onChange(of: type) { _, _ in
+            if type == .auction {
+                ensureAuctionEndDateIsValidIfNeeded()
+                setEndDate(endDate)
+            }
         }
     }
 
@@ -312,7 +415,7 @@ struct CreateListingView: View {
             // ✅ Validation UX: minimum 8h
             if endDate < minAuctionEndDate {
                 errorText = "Un encan doit durer au moins 8 heures."
-                endDate = minAuctionEndDate
+                setEndDate(minAuctionEndDate)
                 return
             }
         }
@@ -329,7 +432,7 @@ struct CreateListingView: View {
         Task {
             do {
                 if let card {
-                    // ✅ FLOW EXISTANT: annonce liée à une carte (conserve ton upload / logique)
+                    // ✅ FLOW EXISTANT: annonce liée à une carte
                     try await marketplace.createListingFromCollection(
                         from: card,
                         title: finalTitle,
@@ -340,7 +443,7 @@ struct CreateListingView: View {
                         endDate: end
                     )
                 } else {
-                    // ✅ NOUVEAU: annonce libre (hybride)
+                    // ✅ NOUVEAU: annonce libre
                     try await repo.createFreeListing(
                         title: finalTitle,
                         descriptionText: desc,
@@ -383,7 +486,7 @@ struct CreateListingView: View {
     }
 }
 
-// MARK: - Preview Row (dans le même fichier)
+// MARK: - Preview Row
 
 private struct MarketplaceDraftPreviewRow: View {
     let imageData: Data?
@@ -419,7 +522,8 @@ private struct MarketplaceDraftPreviewRow: View {
 
                 if isAuction {
                     let start = startingBid ?? 0
-                    Text(String(format: "Mise: %.0f $ CAD • %d mises", start, bidCount))
+                    let countText = (bidCount <= 1) ? "\(bidCount) mise" : "\(bidCount) mises"
+                    Text(String(format: "Mise: %.0f $ CAD • %@", start, countText))
                         .foregroundStyle(.secondary)
 
                     if let endDate {
@@ -505,3 +609,11 @@ private struct MarketplaceDraftPreviewRow: View {
     }
 }
 
+// MARK: - Safe array access
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        guard index >= 0 && index < count else { return nil }
+        return self[index]
+    }
+}

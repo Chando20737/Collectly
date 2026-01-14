@@ -159,7 +159,7 @@ struct CardDetailView: View {
 
                     if listing.type == "auction" {
                         let current = listing.currentBidCAD ?? listing.startingBidCAD ?? 0
-                        Text(String(format: "Mise: %.2f $ CAD • %d mises", current, listing.bidCount))
+                        Text(String(format: "Mise: %.2f $ CAD • %@", current, miseText(listing.bidCount)))
                             .foregroundStyle(.secondary)
 
                         if let end = listing.endDate {
@@ -295,6 +295,13 @@ struct CardDetailView: View {
     private var purchasePriceText: String {
         guard let p = card.purchasePriceCAD else { return "—" }
         return String(format: "%.2f $ CAD", p)
+    }
+
+    // MARK: - French pluralization
+
+    private func miseText(_ count: Int) -> String {
+        // selon ta règle: 0 et 1 = singulier
+        return count <= 1 ? "\(count) mise" : "\(count) mises"
     }
 
     // MARK: - Valeur estimée
@@ -460,8 +467,16 @@ struct CardDetailView: View {
                 uiErrorText = "Entre une mise de départ valide."
                 return
             }
-            guard let end = endDate, end > Date() else {
-                uiErrorText = "La date de fin doit être dans le futur."
+            guard let end = endDate else {
+                uiErrorText = "La date de fin est obligatoire."
+                return
+            }
+
+            // ✅ Valide min 8h côté app aussi (petit buffer)
+            let minAuctionSeconds: TimeInterval = (8 * 60 * 60) + 120
+            let minEnd = Date().addingTimeInterval(minAuctionSeconds)
+            if end < minEnd {
+                uiErrorText = "Un encan doit durer au moins 8 heures."
                 return
             }
         }
@@ -571,7 +586,7 @@ private struct CardHeroImage: View {
     }
 }
 
-// MARK: - Mini listing model (renommé pour éviter conflits)
+// MARK: - Mini listing model
 
 private struct CardDetailListingMini: Identifiable {
     let id: String
@@ -597,22 +612,39 @@ private struct CardDetailListingMini: Identifiable {
 
     static func fromFirestore(doc: DocumentSnapshot) -> CardDetailListingMini {
         let data = doc.data() ?? [:]
+
+        func readInt(_ any: Any?) -> Int {
+            if let i = any as? Int { return i }
+            if let i64 = any as? Int64 { return Int(i64) }
+            if let n = any as? NSNumber { return n.intValue }
+            if let d = any as? Double { return Int(d) }
+            return 0
+        }
+
+        func readDouble(_ any: Any?) -> Double? {
+            if let d = any as? Double { return d }
+            if let i = any as? Int { return Double(i) }
+            if let i64 = any as? Int64 { return Double(i64) }
+            if let n = any as? NSNumber { return n.doubleValue }
+            return nil
+        }
+
         func date(_ key: String) -> Date? { (data[key] as? Timestamp)?.dateValue() }
 
         return CardDetailListingMini(
             id: doc.documentID,
-            type: data["type"] as? String ?? "fixedPrice",
-            status: data["status"] as? String ?? "active",
-            buyNowPriceCAD: data["buyNowPriceCAD"] as? Double,
-            startingBidCAD: data["startingBidCAD"] as? Double,
-            currentBidCAD: data["currentBidCAD"] as? Double,
-            bidCount: data["bidCount"] as? Int ?? 0,
+            type: (data["type"] as? String) ?? "fixedPrice",
+            status: (data["status"] as? String) ?? "active",
+            buyNowPriceCAD: readDouble(data["buyNowPriceCAD"]),
+            startingBidCAD: readDouble(data["startingBidCAD"]),
+            currentBidCAD: readDouble(data["currentBidCAD"]),
+            bidCount: readInt(data["bidCount"]),
             endDate: date("endDate")
         )
     }
 }
 
-// MARK: - Sheet: Mettre en vente (renommé pour éviter conflits)
+// MARK: - Sheet: Mettre en vente (minutes = 00/15/30/45 + min 8h)
 
 private struct CardDetailSellCardSheetView: View {
     let card: CardItem
@@ -633,9 +665,20 @@ private struct CardDetailSellCardSheetView: View {
 
     @State private var buyNowText: String = ""
     @State private var startBidText: String = ""
+
+    // Valeur finale
     @State private var endDate: Date = Date().addingTimeInterval(60 * 60 * 24)
 
+    // ✅ Composantes contrôlées
+    @State private var endDay: Date = Date()
+    @State private var endHour: Int = 12
+    @State private var endMinuteIndex: Int = 0 // 00/15/30/45
+
     @State private var errorText: String? = nil
+
+    // ✅ Minimum 8 heures pour un encan + petit buffer (évite le gap avec request.time)
+    private let minAuctionDurationSeconds: TimeInterval = (8 * 60 * 60) + 120
+    private let minuteSteps: [Int] = [0, 15, 30, 45]
 
     var body: some View {
         NavigationStack {
@@ -661,6 +704,11 @@ private struct CardDetailSellCardSheetView: View {
                         Text("Encan").tag(ListingType.auction)
                     }
                     .pickerStyle(.segmented)
+                    .onChange(of: type) { _, newValue in
+                        if newValue == .auction {
+                            ensureAuctionMinEnd()
+                        }
+                    }
                 }
 
                 if type == .fixedPrice {
@@ -677,9 +725,52 @@ private struct CardDetailSellCardSheetView: View {
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled(true)
 
-                        DatePicker("Fin", selection: $endDate, displayedComponents: [.date, .hourAndMinute])
+                        // ✅ Date (jour)
+                        DatePicker(
+                            "Date",
+                            selection: $endDay,
+                            in: minEndDate().startOfDay()...,
+                            displayedComponents: [.date]
+                        )
+                        .onChange(of: endDay) { _, _ in
+                            syncEndDateFromComponents()
+                        }
+
+                        // ✅ Heure + Minutes (00/15/30/45)
+                        HStack {
+                            Text("Heure")
+                            Spacer()
+
+                            Picker("", selection: $endHour) {
+                                ForEach(0..<24, id: \.self) { h in
+                                    Text(String(format: "%02d", h)).tag(h)
+                                }
+                            }
+                            .pickerStyle(.wheel)
+                            .frame(width: 90, height: 140)
+                            .clipped()
+                            .onChange(of: endHour) { _, _ in
+                                syncEndDateFromComponents()
+                            }
+
+                            Picker("", selection: $endMinuteIndex) {
+                                ForEach(0..<minuteSteps.count, id: \.self) { idx in
+                                    Text(String(format: "%02d", minuteSteps[idx])).tag(idx)
+                                }
+                            }
+                            .pickerStyle(.wheel)
+                            .frame(width: 90, height: 140)
+                            .clipped()
+                            .onChange(of: endMinuteIndex) { _, _ in
+                                syncEndDateFromComponents()
+                            }
+                        }
 
                         Text("Minimum: 8 heures.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        Text("Fin: \(endDate.formatted(date: .abbreviated, time: .shortened))")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -700,7 +791,12 @@ private struct CardDetailSellCardSheetView: View {
                     Button("Publier") { submit() }
                 }
             }
-            .onAppear { presetFromExisting() }
+            .onAppear {
+                presetFromExisting()
+                endDate = roundToNextQuarter(endDate)
+                syncComponentsFromEndDate()
+                ensureAuctionMinEnd()
+            }
         }
     }
 
@@ -712,8 +808,84 @@ private struct CardDetailSellCardSheetView: View {
             if let p = existing.buyNowPriceCAD { buyNowText = String(format: "%.2f", p) }
             if let s = existing.startingBidCAD { startBidText = String(format: "%.2f", s) }
             if let end = existing.endDate { endDate = end }
+        } else {
+            if endDate <= Date() {
+                endDate = Date().addingTimeInterval(60 * 60 * 24)
+            }
         }
     }
+
+    // MARK: - Date helpers
+
+    private func minEndDate() -> Date {
+        Date().addingTimeInterval(minAuctionDurationSeconds)
+    }
+
+    private func ensureAuctionMinEnd() {
+        guard type == .auction else { return }
+        let minEnd = minEndDate()
+        if endDate < minEnd {
+            endDate = roundToNextQuarter(minEnd)
+            syncComponentsFromEndDate()
+        }
+    }
+
+    private func syncComponentsFromEndDate() {
+        let cal = Calendar.current
+
+        endDay = endDate.startOfDay()
+        endHour = cal.component(.hour, from: endDate)
+
+        let m = cal.component(.minute, from: endDate)
+        let nearest = nearestQuarterMinute(m)
+        endMinuteIndex = minuteSteps.firstIndex(of: nearest) ?? 0
+
+        // normaliser endDate exactement sur nos composantes
+        syncEndDateFromComponents()
+    }
+
+    private func syncEndDateFromComponents() {
+        let cal = Calendar.current
+        let minute = minuteSteps[endMinuteIndex]
+
+        var comps = cal.dateComponents([.year, .month, .day], from: endDay)
+        comps.hour = endHour
+        comps.minute = minute
+        comps.second = 0
+
+        if let d = cal.date(from: comps) {
+            endDate = d
+        }
+
+        ensureAuctionMinEnd()
+    }
+
+    private func nearestQuarterMinute(_ m: Int) -> Int {
+        var best = 0
+        var bestDiff = Int.max
+        for c in minuteSteps {
+            let diff = abs(c - m)
+            if diff < bestDiff {
+                bestDiff = diff
+                best = c
+            }
+        }
+        return best
+    }
+
+    private func roundToNextQuarter(_ date: Date) -> Date {
+        let cal = Calendar.current
+        let minute = cal.component(.minute, from: date)
+        let remainder = minute % 15
+        let add = (remainder == 0) ? 0 : (15 - remainder)
+
+        let rounded = cal.date(byAdding: .minute, value: add, to: date) ?? date
+        var c2 = cal.dateComponents([.year, .month, .day, .hour, .minute], from: rounded)
+        c2.second = 0
+        return cal.date(from: c2) ?? rounded
+    }
+
+    // MARK: - Submit
 
     private func submit() {
         errorText = nil
@@ -745,11 +917,19 @@ private struct CardDetailSellCardSheetView: View {
                 errorText = "Entre une mise de départ valide."
                 return
             }
-            if endDate <= Date() {
-                errorText = "La date de fin doit être dans le futur."
+
+            // ✅ revalider min 8h
+            let minEnd = minEndDate()
+            let finalEnd = roundToNextQuarter(endDate)
+
+            if finalEnd < minEnd {
+                errorText = "La fin de l’encan doit être au moins 8 heures dans le futur."
+                endDate = roundToNextQuarter(minEnd)
+                syncComponentsFromEndDate()
                 return
             }
-            onSubmit(cleanTitle, desc, .auction, nil, start, endDate)
+
+            onSubmit(cleanTitle, desc, .auction, nil, start, finalEnd)
             dismiss()
         }
     }
@@ -939,6 +1119,7 @@ private struct EditCardDetailsSheetView: View {
         }
 
         card.title = cleanTitle
+
         let cleanNotes = notes.trimmedLocal
         card.notes = cleanNotes.isEmpty ? nil : cleanNotes
 
@@ -946,7 +1127,7 @@ private struct EditCardDetailsSheetView: View {
         card.cardYear = cardYear.trimmedLocal.nonEmptyOrNil
         card.companyName = companyName.trimmedLocal.nonEmptyOrNil
         card.setName = setName.trimmedLocal.nonEmptyOrNil
-        card.cardNumber = card.cardNumber // (on garde comme tu l’avais; sinon remplace par cardNumber.trimmedLocal.nonEmptyOrNil)
+        card.cardNumber = cardNumber.trimmedLocal.nonEmptyOrNil
 
         card.isGraded = isGraded
         if isGraded {
@@ -987,9 +1168,17 @@ private extension String {
     var nonEmptyOrNil: String? { trimmedLocal.isEmpty ? nil : trimmedLocal }
 }
 
+private extension Date {
+    func startOfDay() -> Date {
+        Calendar.current.startOfDay(for: self)
+    }
+}
+
 private extension Optional where Wrapped == String {
     var cleanOrDash: String {
         guard let v = self?.trimmingCharacters(in: .whitespacesAndNewlines), !v.isEmpty else { return "—" }
         return v
     }
 }
+
+

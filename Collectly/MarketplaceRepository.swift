@@ -15,11 +15,10 @@ final class MarketplaceRepository {
     // MARK: - PUBLIC MARKETPLACE (ACTIVE ONLY)
     //
     // ✅ IMPORTANT:
-    // - Ici, on ne montre QUE "active"
-    // -> "paused" disparait automatiquement du Marketplace
-    //
-    // ✅ Sans orderBy -> pas d’index composite requis
-    // On trie côté iPhone (createdAt desc)
+    // - On ne montre QUE "active"
+    // - Pas de orderBy -> pas d’index composite requis
+    // - On trie côté iPhone (createdAt desc)
+    // ✅ FIX: callbacks sur Main Thread
 
     func listenPublicActiveListings(
         limit: Int = 200,
@@ -33,13 +32,15 @@ final class MarketplaceRepository {
             .addSnapshotListener { snap, error in
 
                 if let error = error as NSError? {
-                    onError(error)
-                    onUpdate([])
+                    DispatchQueue.main.async {
+                        onError(error)
+                        onUpdate([])
+                    }
                     return
                 }
 
                 guard let snap else {
-                    onUpdate([])
+                    DispatchQueue.main.async { onUpdate([]) }
                     return
                 }
 
@@ -54,17 +55,16 @@ final class MarketplaceRepository {
                 }
 
                 items.sort { a, b in a.createdAt > b.createdAt }
-                onUpdate(items)
+
+                DispatchQueue.main.async {
+                    onUpdate(items)
+                }
             }
 
         return listener
     }
 
     // MARK: - MY LISTINGS (private)
-    //
-    // ✅ Ici on veut TOUT voir (active, paused, sold, ended)
-    // ✅ Sans orderBy -> pas d’index composite requis
-    // On trie localement
 
     func listenMyListings(
         uid: String,
@@ -79,13 +79,15 @@ final class MarketplaceRepository {
             .addSnapshotListener { snap, error in
 
                 if let error = error as NSError? {
-                    onError(error)
-                    onUpdate([])
+                    DispatchQueue.main.async {
+                        onError(error)
+                        onUpdate([])
+                    }
                     return
                 }
 
                 guard let snap else {
-                    onUpdate([])
+                    DispatchQueue.main.async { onUpdate([]) }
                     return
                 }
 
@@ -98,7 +100,10 @@ final class MarketplaceRepository {
                 }
 
                 items.sort { a, b in a.createdAt > b.createdAt }
-                onUpdate(items)
+
+                DispatchQueue.main.async {
+                    onUpdate(items)
+                }
             }
 
         return listener
@@ -106,10 +111,15 @@ final class MarketplaceRepository {
 
     // MARK: - CREATE FREE LISTING (Hybrid)
     //
-    // ✅ Annonce libre (sans carte liée)
-    // - Pas d’image uploadée pour l’instant -> imageUrl = nil
-    // - cardId = nil
-    // - On met "active" par défaut
+    // ✅ IMPORTANT pour tes rules:
+    // - fixedPrice: buyNowPriceCAD DOIT être number > 0
+    // - auction:
+    //   - startingBidCAD doit être number >= 0
+    //   - currentBidCAD doit être number >= startingBidCAD (donc on le met = startingBidCAD)
+    //   - endDate doit être Timestamp et > request.time + 8h (tes rules)
+    // - sellerId obligatoire
+    // - status = "active"
+    // - on évite NSNull(); on omet les champs inutiles
 
     func createFreeListing(
         title: String,
@@ -137,33 +147,75 @@ final class MarketplaceRepository {
             )
         }
 
+        let cleanDesc = (descriptionText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let descOrNil: String? = cleanDesc.isEmpty ? nil : cleanDesc
+
         let now = Date()
+        let nowTs = Timestamp(date: now)
+
+        // ✅ Pour être cohérent avec le reste du projet:
+        // même si c’est "free listing", on donne un cardItemId artificiel (string) pour éviter les soucis d’updates/immutables plus tard.
+        let freeCardItemId = UUID().uuidString
 
         var data: [String: Any] = [
             "title": cleanTitle,
-            "descriptionText": descriptionText as Any,
             "type": (type == .auction) ? "auction" : "fixedPrice",
             "status": "active",
-            "createdAt": Timestamp(date: now),
-            "sellerId": user.uid
+            "createdAt": nowTs,
+            "updatedAt": nowTs,
+            "sellerId": user.uid,
+            "cardItemId": freeCardItemId,
+            "bidCount": 0
         ]
 
-        // Hybride: annonce libre
-        data["cardId"] = NSNull()
-        data["imageUrl"] = NSNull()
+        if let descOrNil {
+            data["descriptionText"] = descOrNil
+        }
+        // sinon: on omet complètement descriptionText
 
         if type == .fixedPrice {
-            data["buyNowPriceCAD"] = buyNowPriceCAD as Any
-            data["startingBidCAD"] = NSNull()
-            data["currentBidCAD"] = NSNull()
-            data["bidCount"] = 0
-            data["endDate"] = NSNull()
+            guard let p = buyNowPriceCAD, p > 0 else {
+                throw NSError(
+                    domain: "MarketplaceRepository",
+                    code: 400,
+                    userInfo: [NSLocalizedDescriptionKey: "Entre un prix valide (ex: 25)."]
+                )
+            }
+            data["buyNowPriceCAD"] = p
+            // rien d’autre pour fixedPrice
         } else {
-            data["buyNowPriceCAD"] = NSNull()
-            data["startingBidCAD"] = startingBidCAD as Any
-            data["currentBidCAD"] = NSNull()
-            data["bidCount"] = 0
-            data["endDate"] = endDate != nil ? Timestamp(date: endDate!) : NSNull()
+            // auction
+            guard let endDate else {
+                throw NSError(
+                    domain: "MarketplaceRepository",
+                    code: 400,
+                    userInfo: [NSLocalizedDescriptionKey: "Un encan doit avoir une date de fin."]
+                )
+            }
+
+            // Tes rules: minimum 8h strict
+            let minEnd = now.addingTimeInterval(8 * 60 * 60 + 10 * 60) // ✅ +10 min buffer anti-décalage horloge
+            if endDate <= minEnd {
+                throw NSError(
+                    domain: "MarketplaceRepository",
+                    code: 400,
+                    userInfo: [NSLocalizedDescriptionKey: "Un encan doit durer au minimum 8 heures."]
+                )
+            }
+
+            let start = startingBidCAD ?? 0
+            if start < 0 {
+                throw NSError(
+                    domain: "MarketplaceRepository",
+                    code: 400,
+                    userInfo: [NSLocalizedDescriptionKey: "La mise de départ doit être 0 ou plus."]
+                )
+            }
+
+            // ✅ CRUCIAL: currentBidCAD DOIT être number >= startingBidCAD
+            data["startingBidCAD"] = start
+            data["currentBidCAD"] = start
+            data["endDate"] = Timestamp(date: endDate)
         }
 
         try await db.collection("listings").addDocument(data: data)
@@ -173,7 +225,8 @@ final class MarketplaceRepository {
 
     func setListingStatus(listingId: String, status: String) async throws {
         try await db.collection("listings").document(listingId).updateData([
-            "status": status
+            "status": status,
+            "updatedAt": Timestamp(date: Date())
         ])
     }
 
@@ -188,8 +241,6 @@ final class MarketplaceRepository {
     // - buyNowPriceCAD (si fixedPrice)
     // - startingBidCAD (si auction ET bidCount == 0)
     // - endDate NON modifiable ici
-    //
-    // NOTE: on garde la compatibilité avec tes docs existants (aucun champ obligatoire ajouté).
 
     func updateListing(
         listingId: String,
@@ -210,22 +261,40 @@ final class MarketplaceRepository {
             )
         }
 
+        let cleanDesc = (descriptionText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let descOrNil: String? = cleanDesc.isEmpty ? nil : cleanDesc
+
         var data: [String: Any] = [
             "title": cleanTitle,
-            "descriptionText": descriptionText as Any
+            "updatedAt": Timestamp(date: Date())
         ]
 
+        if let descOrNil {
+            data["descriptionText"] = descOrNil
+        } else {
+            data["descriptionText"] = FieldValue.delete()
+        }
+
         if typeString == "fixedPrice" {
-            data["buyNowPriceCAD"] = buyNowPriceCAD as Any
-            // on ne touche pas aux champs d'encan
+            if let p = buyNowPriceCAD, p > 0 {
+                data["buyNowPriceCAD"] = p
+            } else {
+                // si tu veux interdire de retirer le prix, tu peux throw ici.
+                data["buyNowPriceCAD"] = FieldValue.delete()
+            }
         } else {
             // auction
-            // On autorise la mise de départ seulement s'il n'y a aucune mise
             if bidCount == 0 {
-                data["startingBidCAD"] = startingBidCAD as Any
+                if let s = startingBidCAD, s >= 0 {
+                    data["startingBidCAD"] = s
+                    // ⚠️ on ne touche pas currentBidCAD ici (rules owner updates l’interdisent souvent)
+                } else {
+                    data["startingBidCAD"] = FieldValue.delete()
+                }
             }
         }
 
         try await db.collection("listings").document(listingId).updateData(data)
     }
 }
+

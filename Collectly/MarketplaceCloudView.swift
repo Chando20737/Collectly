@@ -21,9 +21,6 @@ struct MarketplaceCloudView: View {
     @AppStorage("marketplaceViewMode") private var viewModeRaw: String = ViewMode.grid.rawValue
     private var viewMode: ViewMode { ViewMode(rawValue: viewModeRaw) ?? .grid }
 
-    // ✅ NEW: sheet create (free listing)
-    @State private var showingCreate = false
-
     enum ViewMode: String { case list, grid }
 
     enum MarketFilter: String, CaseIterable, Identifiable {
@@ -33,7 +30,6 @@ struct MarketplaceCloudView: View {
         var id: String { rawValue }
     }
 
-    // ✅ Uniformité : réglage unique pour le badge en mode GRILLE
     private let gridBadgeOffset = CGSize(width: -4, height: 6)
 
     var body: some View {
@@ -71,14 +67,6 @@ struct MarketplaceCloudView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
-
-                    // ✅ NEW: Create free listing
-                    Button {
-                        showingCreate = true
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-
                     Button {
                         viewModeRaw = (viewMode == .grid) ? ViewMode.list.rawValue : ViewMode.grid.rawValue
                     } label: {
@@ -92,11 +80,6 @@ struct MarketplaceCloudView: View {
             }
             .onAppear { startListening() }
             .onDisappear { stopListening() }
-            .sheet(isPresented: $showingCreate) {
-                NavigationStack {
-                    CreateListingView(card: nil) // ✅ HYBRIDE: annonce libre
-                }
-            }
         }
     }
 
@@ -150,7 +133,11 @@ struct MarketplaceCloudView: View {
                                 NavigationLink {
                                     ListingCloudDetailView(listing: listing)
                                 } label: {
-                                    MarketplaceGridCardDense(listing: listing, badgeOffset: gridBadgeOffset)
+                                    MarketplaceGridCardDense(
+                                        listing: listing,
+                                        badgeOffset: gridBadgeOffset,
+                                        miseText: miseText
+                                    )
                                 }
                                 .buttonStyle(GridPressableLinkStyle())
                             }
@@ -165,7 +152,11 @@ struct MarketplaceCloudView: View {
                                 NavigationLink {
                                     ListingCloudDetailView(listing: listing)
                                 } label: {
-                                    MarketplaceGridCardDense(listing: listing, badgeOffset: gridBadgeOffset)
+                                    MarketplaceGridCardDense(
+                                        listing: listing,
+                                        badgeOffset: gridBadgeOffset,
+                                        miseText: miseText
+                                    )
                                 }
                                 .buttonStyle(GridPressableLinkStyle())
                             }
@@ -199,7 +190,7 @@ struct MarketplaceCloudView: View {
                         NavigationLink {
                             ListingCloudDetailView(listing: listing)
                         } label: {
-                            MarketplaceListRow(listing: listing)
+                            MarketplaceListRow(listing: listing, miseText: miseText)
                         }
                         .buttonStyle(ListPressableLinkStyle())
                     }
@@ -211,7 +202,7 @@ struct MarketplaceCloudView: View {
                         NavigationLink {
                             ListingCloudDetailView(listing: listing)
                         } label: {
-                            MarketplaceListRow(listing: listing)
+                            MarketplaceListRow(listing: listing, miseText: miseText)
                         }
                         .buttonStyle(ListPressableLinkStyle())
                     }
@@ -240,7 +231,6 @@ struct MarketplaceCloudView: View {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
         return listings
-            // ✅ IMPORTANT: “paused” sort du Marketplace ici (et restera visible dans Mes annonces)
             .filter { $0.status == "active" }
             .filter { l in
                 switch filter {
@@ -258,7 +248,7 @@ struct MarketplaceCloudView: View {
                 return hay.contains(q)
             }
             .sorted { a, b in
-                if a.type != b.type { return a.type == "auction" } // Encans en premier
+                if a.type != b.type { return a.type == "auction" }
                 return a.createdAt > b.createdAt
             }
     }
@@ -284,6 +274,12 @@ struct MarketplaceCloudView: View {
         listener?.remove()
         listener = nil
     }
+
+    // MARK: - French pluralization (✅ 0 et 1 singulier)
+
+    fileprivate func miseText(_ count: Int) -> String {
+        return count <= 1 ? "\(count) mise" : "\(count) mises"
+    }
 }
 
 //
@@ -292,6 +288,7 @@ struct MarketplaceCloudView: View {
 
 private struct MarketplaceListRow: View {
     let listing: ListingCloud
+    let miseText: (Int) -> String
 
     var body: some View {
         HStack(spacing: 12) {
@@ -334,7 +331,7 @@ private struct MarketplaceListRow: View {
                     }
                 } else {
                     let current = listing.currentBidCAD ?? listing.startingBidCAD ?? 0
-                    Text(String(format: "Mise: %.0f $ CAD • %d mises", current, listing.bidCount))
+                    Text(String(format: "Mise: %.0f $ CAD • %@", current, miseText(listing.bidCount)))
                         .foregroundStyle(.secondary)
 
                     if let end = listing.endDate {
@@ -366,6 +363,7 @@ private struct MarketplaceListRow: View {
 private struct MarketplaceGridCardDense: View {
     let listing: ListingCloud
     let badgeOffset: CGSize
+    let miseText: (Int) -> String
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -391,7 +389,7 @@ private struct MarketplaceGridCardDense: View {
                     }
                 } else {
                     let current = listing.currentBidCAD ?? listing.startingBidCAD ?? 0
-                    Text(String(format: "Mise: %.0f $ • %d", current, listing.bidCount))
+                    Text(String(format: "Mise: %.0f $ • %@", current, miseText(listing.bidCount)))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

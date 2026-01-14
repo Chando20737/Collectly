@@ -4,16 +4,16 @@
 //
 //  Created by Eric Chandonnet on 2026-01-12.
 //
-# ======================
-# Xcode
+## ======================
+# Xcode / Swift
 # ======================
 DerivedData/
 *.xcuserstate
 *.xccheckout
 *.xcscmblueprint
 *.xcuserdata/
-*.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings
 *.xcarchive
+*.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings
 
 # ======================
 # macOS
@@ -50,6 +50,12 @@ yarn-error.log*
 *.log
 
 # ======================
-# Misc
+# Environment / Secrets
 # ======================
 .env
+
+# ======================
+# Debug helpers (local only)
+# ======================
+DebugFirebaseError.swift
+

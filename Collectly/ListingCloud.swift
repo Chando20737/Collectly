@@ -45,18 +45,18 @@ struct ListingCloud: Identifiable, Hashable {
     let lastBidderId: String?
     let lastBidderUsername: String?
 
-    // MARK: - Grading
-    let isGraded: Bool
-    let gradingCompany: String?
-    let gradeValue: String?
-    let certificationNumber: String?
-
-    // MARK: - ✅ Real outcome fields (server truth)
+    // MARK: - Finalization (Cloud Functions)
     let buyerId: String?
     let buyerUsername: String?
     let finalPriceCAD: Double?
     let soldAt: Date?
     let endedAt: Date?
+
+    // MARK: - Grading
+    let isGraded: Bool
+    let gradingCompany: String?
+    let gradeValue: String?
+    let certificationNumber: String?
 
     // MARK: - UI helpers
 
@@ -64,38 +64,90 @@ struct ListingCloud: Identifiable, Hashable {
         let text: String
         let icon: String
         let color: Color
+
+        /// Opacité du fond (plus élevé = plus visible)
+        let backgroundOpacity: Double
+
+        /// Opacité du contour
+        let strokeOpacity: Double
     }
+
+    // MARK: - Type badge
 
     var typeBadge: Badge {
         if type == "auction" {
-            return Badge(text: "Encan", icon: "hammer.fill", color: .orange)
+            return Badge(
+                text: "Encan",
+                icon: "hammer.fill",
+                color: .orange,
+                backgroundOpacity: 0.15,
+                strokeOpacity: 0.30
+            )
         } else {
-            return Badge(text: "Acheter maintenant", icon: "tag.fill", color: .blue)
+            return Badge(
+                text: "Acheter maintenant",
+                icon: "tag.fill",
+                color: .blue,
+                backgroundOpacity: 0.15,
+                strokeOpacity: 0.30
+            )
         }
     }
+
+    // MARK: - Status badge (✅ Vendue / Terminée plus visibles)
 
     var statusBadge: Badge? {
         switch status {
         case "active":
-            return Badge(text: "Active", icon: "checkmark.circle.fill", color: .green)
+            return Badge(
+                text: "Active",
+                icon: "checkmark.circle.fill",
+                color: .green,
+                backgroundOpacity: 0.18,
+                strokeOpacity: 0.26
+            )
+
         case "paused":
-            return Badge(text: "En pause", icon: "pause.circle.fill", color: .gray)
+            return Badge(
+                text: "En pause",
+                icon: "pause.circle.fill",
+                color: .gray,
+                backgroundOpacity: 0.18,
+                strokeOpacity: 0.22
+            )
+
         case "sold":
-            return Badge(text: "Vendue", icon: "checkmark.seal.fill", color: .purple)
+            // ✅ Plus opaque
+            return Badge(
+                text: "Vendue",
+                icon: "checkmark.seal.fill",
+                color: .purple,
+                backgroundOpacity: 0.32,
+                strokeOpacity: 0.30
+            )
+
         case "ended":
-            return Badge(text: "Terminée", icon: "xmark.circle.fill", color: .red)
+            // ✅ Plus opaque
+            return Badge(
+                text: "Terminée",
+                icon: "xmark.circle.fill",
+                color: .red,
+                backgroundOpacity: 0.34,
+                strokeOpacity: 0.30
+            )
+
         default:
             return nil
         }
     }
 
+    // MARK: - Grading helpers
+
     var gradingLabel: String? {
         let comp = (gradingCompany ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let grade = (gradeValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if !comp.isEmpty && !grade.isEmpty {
-            return "\(comp) \(grade)"
-        }
+        if !comp.isEmpty && !grade.isEmpty { return "\(comp) \(grade)" }
         if !grade.isEmpty { return grade }
         return nil
     }
@@ -109,25 +161,22 @@ struct ListingCloud: Identifiable, Hashable {
     static func fromFirestore(doc: DocumentSnapshot) -> ListingCloud {
         let data = doc.data() ?? [:]
 
-        let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(timeIntervalSince1970: 0)
+        let createdAt = (data["createdAt"] as? Timestamp)?.dateValue()
+            ?? Date(timeIntervalSince1970: 0)
         let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue()
 
         let endDate = (data["endDate"] as? Timestamp)?.dateValue()
+        let soldAt = (data["soldAt"] as? Timestamp)?.dateValue()
+        let endedAt = (data["endedAt"] as? Timestamp)?.dateValue()
 
-        // ✅ Robust number casts
+        // Robust numeric parsing
         let bidCount = readInt(data["bidCount"]) ?? 0
         let buyNow = readDouble(data["buyNowPriceCAD"])
         let starting = readDouble(data["startingBidCAD"])
         let current = readDouble(data["currentBidCAD"])
+        let finalPrice = readDouble(data["finalPriceCAD"])
 
         let isGraded = (data["isGraded"] as? Bool) ?? false
-
-        // ✅ Real outcome fields
-        let buyerId = (data["buyerId"] as? String)
-        let buyerUsername = (data["buyerUsername"] as? String)
-        let finalPriceCAD = readDouble(data["finalPriceCAD"])
-        let soldAt = (data["soldAt"] as? Timestamp)?.dateValue()
-        let endedAt = (data["endedAt"] as? Timestamp)?.dateValue()
 
         return ListingCloud(
             id: doc.documentID,
@@ -156,18 +205,20 @@ struct ListingCloud: Identifiable, Hashable {
             lastBidderId: data["lastBidderId"] as? String,
             lastBidderUsername: data["lastBidderUsername"] as? String,
 
+            buyerId: data["buyerId"] as? String,
+            buyerUsername: data["buyerUsername"] as? String,
+            finalPriceCAD: finalPrice,
+            soldAt: soldAt,
+            endedAt: endedAt,
+
             isGraded: isGraded,
             gradingCompany: data["gradingCompany"] as? String,
             gradeValue: data["gradeValue"] as? String,
-            certificationNumber: data["certificationNumber"] as? String,
-
-            buyerId: buyerId,
-            buyerUsername: buyerUsername,
-            finalPriceCAD: finalPriceCAD,
-            soldAt: soldAt,
-            endedAt: endedAt
+            certificationNumber: data["certificationNumber"] as? String
         )
     }
+
+    // MARK: - Helpers (robust casts)
 
     private static func readInt(_ any: Any?) -> Int? {
         if let i = any as? Int { return i }

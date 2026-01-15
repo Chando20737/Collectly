@@ -15,7 +15,6 @@ struct MyDealsCloudView: View {
     let userId: String
     let initialTab: Tab
 
-    // ✅ Permet au Hub "Mes annonces" d’ouvrir directement Mes ventes ou Mes enchères
     init(userId: String, initialTab: Tab = .bids) {
         self.userId = userId
         self.initialTab = initialTab
@@ -29,13 +28,16 @@ struct MyDealsCloudView: View {
     @State private var myBidListings: [ListingCloud] = []
 
     @State private var errorText: String?
-
     @State private var tab: Tab = .bids
 
     @State private var bidsFilter: BidsFilter = .active
     @State private var salesFilter: SalesFilter = .active
 
     @State private var query: String = ""
+
+    // ✅ Micro-UX
+    @State private var isRefreshing: Bool = false
+    @State private var toast: Toast? = nil
 
     enum Tab: String, CaseIterable, Identifiable {
         case bids = "Mes enchères"
@@ -56,7 +58,6 @@ struct MyDealsCloudView: View {
         var id: String { rawValue }
     }
 
-    // ✅ Background compatible (iOS 14/15+)
     private var frostedBG: AnyShapeStyle {
         if #available(iOS 15.0, *) {
             return AnyShapeStyle(.ultraThinMaterial)
@@ -80,6 +81,7 @@ struct MyDealsCloudView: View {
                 .pickerStyle(.segmented)
                 .padding(.horizontal, 12)
                 .padding(.top, 6)
+                .onChangeUX(of: tab) { Haptic.light() }
 
                 // Sub-filters
                 HStack(spacing: 10) {
@@ -90,6 +92,7 @@ struct MyDealsCloudView: View {
                             }
                         }
                         .pickerStyle(.segmented)
+                        .onChangeUX(of: bidsFilter) { Haptic.light() }
                     } else {
                         Picker("", selection: $salesFilter) {
                             ForEach(SalesFilter.allCases) { f in
@@ -97,6 +100,7 @@ struct MyDealsCloudView: View {
                             }
                         }
                         .pickerStyle(.segmented)
+                        .onChangeUX(of: salesFilter) { Haptic.light() }
                     }
                 }
                 .padding(.horizontal, 12)
@@ -111,7 +115,10 @@ struct MyDealsCloudView: View {
                         .autocorrectionDisabled()
 
                     if !query.isEmpty {
-                        Button { query = "" } label: {
+                        Button {
+                            Haptic.light()
+                            query = ""
+                        } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .foregroundStyle(.secondary)
                         }
@@ -141,22 +148,25 @@ struct MyDealsCloudView: View {
                         )
                     } else {
                         ScrollView {
-                            LazyVStack(spacing: 10) {
-                                ForEach(currentList) { listing in
+                            LazyVStack(spacing: 0) {
+                                ForEach(Array(currentList.enumerated()), id: \.element.id) { idx, listing in
                                     NavigationLink {
                                         ListingCloudDetailView(listing: listing)
                                     } label: {
-                                        MyDealsRow(
-                                            listing: listing,
-                                            endingSoonThreshold: endingSoonThreshold
-                                        )
+                                        VStack(spacing: 0) {
+                                            MyDealsRow(
+                                                listing: listing,
+                                                endingSoonThreshold: endingSoonThreshold
+                                            )
+
+                                            // ✅ Divider aligné après la vignette
+                                            if idx != currentList.count - 1 {
+                                                Divider()
+                                                    .padding(.leading, 12 + 78 + 12)
+                                            }
+                                        }
                                     }
                                     .buttonStyle(MyDealsPressableStyle())
-
-                                    // ✅ séparateur léger (plus clean que couleurs alternées)
-                                    Divider()
-                                        .opacity(0.25)
-                                        .padding(.leading, 102) // aligne avec le texte (après thumbnail)
                                 }
                                 Spacer(minLength: 12)
                             }
@@ -171,9 +181,17 @@ struct MyDealsCloudView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { startListening(forceRestart: true) } label: {
+                    Button { refreshTapped() } label: {
                         Image(systemName: "arrow.clockwise")
+                            .rotationEffect(.degrees(isRefreshing ? 360 : 0))
+                            .animation(
+                                isRefreshing
+                                ? .linear(duration: 0.8).repeatForever(autoreverses: false)
+                                : .default,
+                                value: isRefreshing
+                            )
                     }
+                    .disabled(isRefreshing)
                 }
             }
             .onAppear {
@@ -181,6 +199,21 @@ struct MyDealsCloudView: View {
                 startListening()
             }
             .onDisappear { stopListening() }
+        }
+        .toast($toast)
+    }
+
+    // MARK: - Micro-UX refresh
+
+    private func refreshTapped() {
+        Haptic.light()
+        toast = Toast(style: .info, title: "Actualisation…", systemImage: "arrow.clockwise")
+        isRefreshing = true
+        startListening(forceRestart: true)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+            isRefreshing = false
+            toast = Toast(style: .success, title: "À jour", systemImage: "checkmark.circle.fill")
         }
     }
 
@@ -201,7 +234,6 @@ struct MyDealsCloudView: View {
         }
 
         if tab == .bids {
-
             // ✅ Mes enchères (MVP): auctions où tu es lastBidderId (filtré côté repo)
             list = list.filter { $0.type == "auction" }
 
@@ -212,38 +244,37 @@ struct MyDealsCloudView: View {
                     guard let end = l.endDate else { return true }
                     return end > now
                 }
-
-                list.sort(by: { (a: ListingCloud, b: ListingCloud) in
+                // tri: fin bientôt
+                list.sort { a, b in
                     let da = a.endDate ?? .distantFuture
                     let db = b.endDate ?? .distantFuture
                     if da != db { return da < db }
                     return a.createdAt > b.createdAt
-                })
+                }
 
             case .ended:
-                // terminé si status != active OU endDate passée
                 list = list.filter { l in
                     if l.status != "active" { return true }
                     if let end = l.endDate { return end <= now }
                     return false
                 }
-
-                list.sort(by: { (a: ListingCloud, b: ListingCloud) in
-                    a.createdAt > b.createdAt
-                })
+                // tri: le plus récent d'abord (soldAt/endedAt si dispo)
+                list.sort { a, b in
+                    let ta = a.soldAt ?? a.endedAt ?? a.updatedAt ?? a.createdAt
+                    let tb = b.soldAt ?? b.endedAt ?? b.updatedAt ?? b.createdAt
+                    return ta > tb
+                }
             }
 
         } else {
-
-            // ✅ Mes ventes: basé sur les statuts “réels”
+            // ✅ Mes ventes: basé sur status
             switch salesFilter {
-            case .active:
-                list = list.filter { l in
-                    l.status == "active" || l.status == "paused"
-                }
 
-                // tri: encans fin bientôt, sinon récents
-                list.sort(by: { (a: ListingCloud, b: ListingCloud) in
+            case .active:
+                list = list.filter { $0.status == "active" || $0.status == "paused" }
+
+                // tri: encans fin bientôt en premier, sinon récents
+                list.sort { a, b in
                     if a.type != b.type { return a.type == "auction" }
                     if a.type == "auction" && b.type == "auction" {
                         let da = a.endDate ?? .distantFuture
@@ -252,19 +283,23 @@ struct MyDealsCloudView: View {
                         return a.createdAt > b.createdAt
                     }
                     return a.createdAt > b.createdAt
-                })
+                }
 
             case .sold:
                 list = list.filter { $0.status == "sold" }
-                list.sort(by: { (a: ListingCloud, b: ListingCloud) in
-                    a.createdAt > b.createdAt
-                })
+                list.sort { a, b in
+                    let ta = a.soldAt ?? a.updatedAt ?? a.createdAt
+                    let tb = b.soldAt ?? b.updatedAt ?? b.createdAt
+                    return ta > tb
+                }
 
             case .ended:
                 list = list.filter { $0.status == "ended" }
-                list.sort(by: { (a: ListingCloud, b: ListingCloud) in
-                    a.createdAt > b.createdAt
-                })
+                list.sort { a, b in
+                    let ta = a.endedAt ?? a.updatedAt ?? a.createdAt
+                    let tb = b.endedAt ?? b.updatedAt ?? b.createdAt
+                    return ta > tb
+                }
             }
         }
 
@@ -282,14 +317,22 @@ struct MyDealsCloudView: View {
             sellerId: userId,
             limit: 200,
             onUpdate: { self.mySales = $0 },
-            onError: { self.errorText = $0.localizedDescription }
+            onError: { err in
+                self.errorText = err.localizedDescription
+                self.toast = Toast(style: .error, title: "Erreur de chargement", systemImage: "exclamationmark.triangle.fill", duration: 2.6)
+                Haptic.error()
+            }
         )
 
         bidsListener = repo.listenMyBidListings(
             bidderId: userId,
             limit: 200,
             onUpdate: { self.myBidListings = $0 },
-            onError: { self.errorText = $0.localizedDescription }
+            onError: { err in
+                self.errorText = err.localizedDescription
+                self.toast = Toast(style: .error, title: "Erreur de chargement", systemImage: "exclamationmark.triangle.fill", duration: 2.6)
+                Haptic.error()
+            }
         )
     }
 
@@ -301,7 +344,7 @@ struct MyDealsCloudView: View {
     }
 }
 
-// MARK: - Row (compact list)
+// MARK: - Row
 
 private struct MyDealsRow: View {
 
@@ -317,6 +360,14 @@ private struct MyDealsRow: View {
     }
 
     private var priceLine: String {
+        if listing.status == "sold" {
+            let p = listing.finalPriceCAD
+                ?? listing.currentBidCAD
+                ?? listing.buyNowPriceCAD
+                ?? 0
+            return String(format: "Vendu • %.0f $ CAD", p)
+        }
+
         if listing.type == "fixedPrice" {
             if let p = listing.buyNowPriceCAD {
                 return String(format: "%.0f $ CAD", p)
@@ -324,23 +375,62 @@ private struct MyDealsRow: View {
             return "Prix non défini"
         } else {
             let current = listing.currentBidCAD ?? listing.startingBidCAD ?? 0
-            return String(format: "Mise: %.0f $ CAD • %@",
-                          current,
-                          (listing.bidCount <= 1 ? "\(listing.bidCount) mise" : "\(listing.bidCount) mises"))
+            let countText = (listing.bidCount <= 1 ? "\(listing.bidCount) mise" : "\(listing.bidCount) mises")
+            return String(format: "Mise: %.0f $ CAD • %@", current, countText)
         }
+    }
+
+    private var subLine: String? {
+        if listing.status == "sold" {
+            let buyer = (listing.buyerUsername ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let who = buyer.isEmpty ? nil : "@\(buyer)"
+            let date = listing.soldAt
+
+            if let who, let date {
+                return "\(who) • \(date.formatted(date: .abbreviated, time: .shortened))"
+            }
+            if let who { return who }
+            if let date { return date.formatted(date: .abbreviated, time: .shortened) }
+            return nil
+        }
+
+        if listing.status == "ended" {
+            if let date = listing.endedAt {
+                return "Terminée • \(date.formatted(date: .abbreviated, time: .shortened))"
+            }
+            return "Terminée"
+        }
+
+        if listing.type == "auction", let end = listing.endDate, listing.status == "active" {
+            return "Se termine \(end.formatted(date: .abbreviated, time: .shortened))"
+        }
+
+        return nil
     }
 
     var body: some View {
         HStack(spacing: 12) {
 
-            MyDealsThumb(urlString: listing.imageUrl, size: CGSize(width: 78, height: 112))
+            ZStack(alignment: .topTrailing) {
+                MyDealsThumb(urlString: listing.imageUrl, size: CGSize(width: 78, height: 112))
+                    .zIndex(0)
+
+                VStack(alignment: .trailing, spacing: 6) {
+                    if listing.shouldShowGradingBadge, let label = listing.gradingLabel {
+                        GradingOverlayBadge(label: label, compact: true)
+                    }
+                }
+                .padding(.top, 6)
+                .padding(.trailing, 6)
+                .zIndex(10)
+            }
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(listing.title)
                     .font(.headline)
                     .lineLimit(2)
 
-                // ✅ même ligne: Type + Se termine bientôt (si applicable)
+                // ✅ Même ligne: Type + Se termine bientôt + Statut (vendue/terminée/pause)
                 HStack(spacing: 8) {
                     ListingBadgeView(
                         text: listing.typeBadge.text,
@@ -349,17 +439,36 @@ private struct MyDealsRow: View {
                     )
 
                     if isEndingSoon {
-                        EndingSoonBadgeInline()
+                        EndingSoonChipInline()
+                    }
+
+                    // ✅ Statut: MyStatusChip (opacités)
+                    if let s = listing.statusBadge, listing.status != "active" {
+                        MyStatusChip(
+                            text: s.text,
+                            systemImage: s.icon,
+                            color: s.color,
+                            backgroundOpacity: s.backgroundOpacity,
+                            strokeOpacity: s.strokeOpacity,
+                            isOverlayOnImage: false
+                        )
                     }
 
                     Spacer(minLength: 0)
                 }
 
                 Text(priceLine)
-                    .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
 
-                if listing.type == "auction", let end = listing.endDate, listing.status == "active" {
+                if let subLine {
+                    Text(subLine)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                if listing.status == "active", listing.type == "auction", let end = listing.endDate {
                     RemainingTimeText(endDate: end)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -375,8 +484,32 @@ private struct MyDealsRow: View {
 
             Spacer()
         }
-        .padding(.vertical, 8) // ✅ réduit hauteur
+        .padding(.vertical, 8)
         .contentShape(Rectangle())
+    }
+}
+
+// ✅ Chip “Se termine bientôt” compact sur la même ligne que “Encan”
+private struct EndingSoonChipInline: View {
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "clock.fill")
+                .font(.caption2)
+            Text("Se termine bientôt")
+                .font(.caption2.weight(.semibold))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(
+            Capsule()
+                .fill(Color(.systemBackground).opacity(0.92))
+        )
+        .overlay(
+            Capsule()
+                .stroke(Color.orange.opacity(0.75), lineWidth: 1)
+        )
+        .foregroundStyle(Color.orange)
     }
 }
 
@@ -433,7 +566,7 @@ private struct RemainingTimeText: View {
             if remaining <= 0 {
                 Text("Terminé")
             } else {
-                Text("Se termine dans \(formatRemaining(remaining))")
+                Text("Reste \(formatRemaining(remaining))")
             }
         }
     }
@@ -447,31 +580,6 @@ private struct RemainingTimeText: View {
         if d > 0 { return "\(d)j \(h % 24)h" }
         if h > 0 { return "\(h)h \(m % 60)m" }
         return "\(m)m"
-    }
-}
-
-// MARK: - Ending Soon Badge inline (small)
-
-private struct EndingSoonBadgeInline: View {
-    var body: some View {
-        HStack(spacing: 5) {
-            Image(systemName: "clock.fill")
-                .font(.caption2)
-            Text("Bientôt")
-                .font(.caption2.weight(.semibold))
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(
-            Capsule()
-                .fill(Color.orange.opacity(0.12))
-        )
-        .overlay(
-            Capsule()
-                .stroke(Color.orange.opacity(0.40), lineWidth: 1)
-        )
-        .foregroundStyle(Color.orange)
-        .lineLimit(1)
     }
 }
 
@@ -490,3 +598,27 @@ private struct MyDealsPressableStyle: ButtonStyle {
             .animation(.spring(response: 0.22, dampingFraction: 0.85), value: configuration.isPressed)
     }
 }
+
+// MARK: - iOS17 onChange compat (no warnings)
+
+private extension View {
+
+    @ViewBuilder
+    func onChangeUX<V: Equatable>(of value: V, _ action: @escaping () -> Void) -> some View {
+        if #available(iOS 17.0, *) {
+            self.onChange(of: value) { _, _ in
+                action()
+            }
+        } else {
+            self._onChangeUXDeprecated(of: value, action)
+        }
+    }
+
+    @available(iOS, introduced: 14.0, deprecated: 17.0)
+    private func _onChangeUXDeprecated<V: Equatable>(of value: V, _ action: @escaping () -> Void) -> some View {
+        self.onChange(of: value) { _ in
+            action()
+        }
+    }
+}
+

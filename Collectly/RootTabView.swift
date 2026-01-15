@@ -38,7 +38,7 @@ struct RootTabView: View {
                 .tag(Tab.marketplace)
 
             // ✅ Mes annonces (si pas connecté, la vue montre "Connexion requise")
-            MyListingsView()
+            MyListingsHubView()
                 .tabItem { Label("Mes annonces", systemImage: "tray.full") }
                 .tag(Tab.myListings)
 

@@ -19,9 +19,11 @@ extension MarketplaceRepository {
 
         let db = Firestore.firestore()
 
-        // ⚠️ Peut demander un index composite selon tes autres where/orderBy
+        // ✅ Trie par updatedAt (réel) puis createdAt (fallback)
+        // ⚠️ Requiert un index composite: sellerId + updatedAt DESC (+ createdAt DESC)
         let q = db.collection("listings")
             .whereField("sellerId", isEqualTo: sellerId)
+            .order(by: "updatedAt", descending: true)
             .order(by: "createdAt", descending: true)
             .limit(to: limit)
 
@@ -44,11 +46,12 @@ extension MarketplaceRepository {
 
         let db = Firestore.firestore()
 
-        // On filtre type == auction pour éviter le bruit
-        // ⚠️ peut demander un index composite (lastBidderId + type + createdAt)
+        // ✅ Trie par updatedAt (réel) puis createdAt (fallback)
+        // ⚠️ Index composite: type + lastBidderId + updatedAt DESC (+ createdAt DESC)
         let q = db.collection("listings")
             .whereField("type", isEqualTo: "auction")
             .whereField("lastBidderId", isEqualTo: bidderId)
+            .order(by: "updatedAt", descending: true)
             .order(by: "createdAt", descending: true)
             .limit(to: limit)
 

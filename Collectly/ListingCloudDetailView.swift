@@ -10,701 +10,817 @@ import FirebaseFirestore
 
 struct ListingCloudDetailView: View {
 
+    @EnvironmentObject private var session: SessionStore
+
+    // Input
     let listing: ListingCloud
 
-    @Environment(\.dismiss) private var dismiss
-
+    // Live doc listener
+    @State private var docListener: ListenerRegistration?
     @State private var current: ListingCloud
-    @State private var listener: ListenerRegistration?
 
-    @State private var uiErrorText: String? = nil
-    @State private var isWorking: Bool = false
+    // Micro-UX
+    @State private var toast: Toast? = nil
+    @State private var isBuying: Bool = false
+    @State private var isBidding: Bool = false
 
-    // ✅ Acheteur (actions)
-    @State private var bidInput: String = ""
-    @State private var showBuyConfirm: Bool = false
-    @State private var showBidConfirm: Bool = false
-    @State private var actionError: String? = nil
-    @State private var actionSuccess: String? = nil
+    // Bid UI
+    @State private var showBidSheet: Bool = false
+    @State private var bidAmountText: String = ""
 
-    private let db = Firestore.firestore()
-    private let marketplace = MarketplaceService()
+    // MARK: - Init
 
     init(listing: ListingCloud) {
         self.listing = listing
         _current = State(initialValue: listing)
     }
 
-    // MARK: - Bindings
+    // MARK: - Constants
 
-    private var actionErrorPresented: Binding<Bool> {
-        Binding(
-            get: { actionError != nil },
-            set: { newValue in if !newValue { actionError = nil } }
-        )
-    }
+    /// ⚠️ Ajuste si ta collection Firestore a un autre nom
+    private let listingsCollection = "listings"
 
-    private var actionSuccessPresented: Binding<Bool> {
-        Binding(
-            get: { actionSuccess != nil },
-            set: { newValue in if !newValue { actionSuccess = nil } }
-        )
-    }
+    /// Incrément minimal (MVP)
+    private let minBidIncrement: Double = 1
 
-    // MARK: - FR plural (0 et 1 -> singulier)
+    // MARK: - Computed
 
-    private func misesText(_ count: Int) -> String {
-        return count <= 1 ? "\(count) mise" : "\(count) mises"
-    }
-
-    // MARK: - Derived
+    private var uid: String? { session.user?.uid }
 
     private var isOwner: Bool {
-        guard let uid = Auth.auth().currentUser?.uid else { return false }
+        guard let uid else { return false }
         return current.sellerId == uid
     }
 
     private var isAuction: Bool { current.type == "auction" }
     private var isFixed: Bool { current.type == "fixedPrice" }
 
-    private var isClosed: Bool {
-        current.status == "sold" || current.status == "ended"
-    }
+    private var isActive: Bool { current.status == "active" }
 
-    private var resultTitle: String? {
-        switch current.status {
-        case "sold": return "Vendue"
-        case "ended": return "Terminée"
-        default: return nil
-        }
-    }
+    private var endDate: Date? { current.endDate }
 
-    private var resultSubtitle: String? {
-        if current.status == "sold" {
-            if let u = current.buyerUsername, !u.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return "Vendu à @\(u)"
-            }
-            if let _ = current.buyerId {
-                return "Vendu"
-            }
-            return "Vendu"
-        }
-        if current.status == "ended" {
-            return "Terminée sans vente"
-        }
-        return nil
-    }
-
-    // MARK: - Buyer / Owner rules
-
-    private var canTogglePause: Bool {
-        if current.status == "sold" || current.status == "ended" { return false }
-        if current.type == "auction" { return current.bidCount == 0 }
-        return true
-    }
-
-    private var canEndNow: Bool {
-        if current.status == "sold" || current.status == "ended" { return false }
-
-        if current.type == "fixedPrice" {
-            return current.status == "active" || current.status == "paused"
-        }
-
-        if current.type == "auction" {
-            return (current.status == "active" || current.status == "paused") && current.bidCount == 0
-        }
-
-        return false
-    }
-
-    private var canInteractAsBuyer: Bool {
-        guard current.status == "active" else { return false }
-
-        if current.type == "auction" {
-            guard let end = current.endDate else { return false }
-            return end > Date()
-        }
-        return true
-    }
-
-    private var canBuyNow: Bool {
-        guard !isOwner else { return false }
-        guard current.type == "fixedPrice" else { return false }
-        guard current.status == "active" else { return false }
-        let p = current.buyNowPriceCAD ?? 0
-        return p > 0
+    private var hasEndedByTime: Bool {
+        guard let endDate else { return false }
+        return endDate <= Date()
     }
 
     private var canBid: Bool {
-        guard !isOwner else { return false }
-        guard current.type == "auction" else { return false }
-        guard current.status == "active" else { return false }
-        guard let end = current.endDate, end > Date() else { return false }
-        return true
+        guard uid != nil else { return false }
+        guard isAuction else { return false }
+        guard isActive else { return false }
+        guard !hasEndedByTime else { return false }
+        return !isOwner
     }
 
-    private var buyerDisabledHint: String {
-        if current.status != "active" {
-            if current.status == "sold" { return "Cette annonce est vendue." }
-            if current.status == "ended" { return "Cette annonce est terminée." }
-            if current.status == "paused" { return "Cette annonce est en pause." }
-            return "Cette annonce n’est pas active."
-        }
-        if current.type == "auction" && (current.endDate ?? Date()) <= Date() {
-            return "Cet encan est terminé."
-        }
-        return "Action indisponible."
+    private var canBuyNow: Bool {
+        guard uid != nil else { return false }
+        guard isActive else { return false }
+        guard !hasEndedByTime else { return false }
+        return !isOwner && buyNowPriceCAD > 0
     }
 
-    private var ownerHintText: String {
-        if current.status == "paused" {
-            return "En pause: l’annonce n’apparaît plus dans Marketplace, mais reste dans « Mes annonces »."
-        }
-        if current.status == "active" {
-            return "Active: visible dans Marketplace."
-        }
-        if current.status == "sold" {
-            return "Vendue: aucune modification possible."
-        }
-        if current.status == "ended" {
-            return "Terminée: aucune modification possible."
-        }
-        return ""
+    private var currentBidCAD: Double {
+        current.currentBidCAD ?? current.startingBidCAD ?? 0
     }
+
+    private var buyNowPriceCAD: Double {
+        current.buyNowPriceCAD ?? 0
+    }
+
+    private var nextMinBid: Double {
+        max(currentBidCAD + minBidIncrement, minBidIncrement)
+    }
+
+    private var frostedBG: AnyShapeStyle {
+        if #available(iOS 15.0, *) {
+            return AnyShapeStyle(.ultraThinMaterial)
+        } else {
+            return AnyShapeStyle(Color(.secondarySystemBackground).opacity(0.95))
+        }
+    }
+
+    // MARK: - Body
 
     var body: some View {
-        Form {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
 
-            // MARK: - Image
-            Section {
-                ListingRemoteHeroImage(urlString: current.imageUrl)
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
+                headerImage
+
+                titleBlock
+
+                metaBlock
+
+                if let desc = current.descriptionText,
+                   !desc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    descriptionBlock(desc)
+                }
+
+                actionBlock
+
+                Spacer(minLength: 14)
             }
-
-            // MARK: - Main info
-            Section {
-                Text(current.title)
-                    .font(.headline)
-
-                if let d = current.descriptionText, !d.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text(d)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            // MARK: - Result (REAL STATES)
-            if let title = resultTitle {
-                Section("Résultat") {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text("État")
-                        Spacer()
-                        Text(title)
-                            .foregroundStyle(current.status == "sold" ? .purple : .red)
-                            .font(.headline)
-                    }
-
-                    if let sub = resultSubtitle {
-                        Text(sub)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if current.status == "sold" {
-                        if let p = current.finalPriceCAD {
-                            HStack {
-                                Text("Prix final")
-                                Spacer()
-                                Text(String(format: "%.2f $ CAD", p))
-                                    .foregroundStyle(.secondary)
-                            }
-                        } else if isFixed, let p = current.buyNowPriceCAD {
-                            HStack {
-                                Text("Prix")
-                                Spacer()
-                                Text(String(format: "%.2f $ CAD", p))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-
-                        if let when = current.soldAt {
-                            HStack {
-                                Text("Vendu le")
-                                Spacer()
-                                Text(when.formatted(date: .abbreviated, time: .shortened))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-
-                    if current.status == "ended" {
-                        if let when = current.endedAt {
-                            HStack {
-                                Text("Terminé le")
-                                Spacer()
-                                Text(when.formatted(date: .abbreviated, time: .shortened))
-                                    .foregroundStyle(.secondary)
-                            }
-                        } else if isAuction, let end = current.endDate {
-                            HStack {
-                                Text("Fin prévue")
-                                Spacer()
-                                Text(end.formatted(date: .abbreviated, time: .shortened))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-
-                    Text("Cet état est déterminé automatiquement et ne peut pas être modifié.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            // MARK: - Listing info
-            Section("Annonce") {
-
-                HStack {
-                    Text("Type")
-                    Spacer()
-                    Text(isFixed ? "Prix fixe" : "Encan")
-                        .foregroundStyle(.secondary)
-                }
-
-                HStack {
-                    Text("Statut")
-                    Spacer()
-                    Text(statusLabel(current.status))
-                        .foregroundStyle(.secondary)
-                }
-
-                if isFixed {
-                    HStack {
-                        Text("Prix")
-                        Spacer()
-                        Text(current.buyNowPriceCAD == nil
-                             ? "—"
-                             : String(format: "%.2f $ CAD", current.buyNowPriceCAD ?? 0))
-                        .foregroundStyle(.secondary)
-                    }
-                } else {
-                    let currentBid = current.currentBidCAD ?? current.startingBidCAD ?? 0
-                    let countText = misesText(current.bidCount)
-
-                    Text(String(format: "Mise: %.2f $ CAD • %@", currentBid, countText))
-                        .foregroundStyle(.secondary)
-
-                    if let end = current.endDate {
-                        Text("Temps restant: \(timeRemainingText(until: end))")
-                            .font(.footnote)
-                            .foregroundStyle(end <= Date() ? .red : .secondary)
-
-                        Text("Se termine le \(end.formatted(date: .abbreviated, time: .shortened))")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if let u = current.sellerUsername, !u.isEmpty {
-                    Text("@\(u)")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            // MARK: - Buyer actions
-            if !isOwner {
-                Section("Actions") {
-                    if isFixed {
-                        buyNowActionBlock
-                    } else {
-                        auctionBidActionBlock
-                    }
-
-                    if !canInteractAsBuyer {
-                        Text(buyerDisabledHint)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-
-            // MARK: - Owner controls
-            if isOwner {
-                Section("Gestion") {
-
-                    Button {
-                        Task { await togglePauseResume() }
-                    } label: {
-                        Label(
-                            current.status == "paused" ? "Réactiver" : "Mettre en pause",
-                            systemImage: current.status == "paused" ? "play.circle.fill" : "pause.circle.fill"
-                        )
-                    }
-                    .disabled(isWorking || !canTogglePause)
-
-                    if canEndNow {
-                        Button(role: .destructive) {
-                            Task { await endListingNow() }
-                        } label: {
-                            Label("Retirer l’annonce", systemImage: "xmark.circle")
-                        }
-                        .disabled(isWorking)
-                    }
-
-                    Text(ownerHintText)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            // MARK: - Errors (Firestore listener / owner actions)
-            if let uiErrorText {
-                Section("Erreur") {
-                    Text(uiErrorText)
-                        .foregroundStyle(.red)
-                }
-            }
+            .padding(.horizontal, 14)
+            .padding(.top, 10)
+            .padding(.bottom, 22)
         }
         .navigationTitle("Annonce")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Fermer") { dismiss() }
-                    .disabled(isWorking)
-            }
-        }
-        .onAppear { startListening() }
-        .onDisappear { stopListening() }
-
-        // ✅ Confirmations
-        .confirmationDialog(
-            "Acheter maintenant?",
-            isPresented: $showBuyConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Confirmer l’achat", role: .destructive) {
-                Task { await buyNow() }
-            }
-            Button("Annuler", role: .cancel) {}
-        } message: {
-            let price = current.buyNowPriceCAD ?? 0
-            Text("Tu vas acheter cette annonce pour \(String(format: "%.2f", price)) $ CAD.")
-        }
-
-        .confirmationDialog(
-            "Confirmer ta mise?",
-            isPresented: $showBidConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Placer la mise", role: .destructive) {
-                Task { await placeBid() }
-            }
-            Button("Annuler", role: .cancel) {}
-        } message: {
-            Text("Montant: \(bidInput.trimmingCharacters(in: .whitespacesAndNewlines)) $ CAD")
-        }
-
-        // ✅ Alerts
-        .alert("Erreur", isPresented: actionErrorPresented) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(actionError ?? "")
-        }
-        .alert("Succès", isPresented: actionSuccessPresented) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(actionSuccess ?? "")
+        .toast($toast)
+        .onAppear { startDocListener() }
+        .onDisappear { stopDocListener() }
+        .sheet(isPresented: $showBidSheet) {
+            bidSheet
         }
     }
 
-    // MARK: - Buyer UI blocks
+    // MARK: - UI blocks
 
-    private var buyNowActionBlock: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private var headerImage: some View {
+        ZStack(alignment: .topTrailing) {
 
-            let price = current.buyNowPriceCAD
+            ZStack {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color(.secondarySystemGroupedBackground))
 
-            HStack {
-                Text("Prix")
-                Spacer()
-                Text(price == nil ? "—" : String(format: "%.2f $ CAD", price ?? 0))
-                    .foregroundStyle(.secondary)
-            }
-
-            Button {
-                guard validateBuyNowBeforeConfirm() else { return }
-                showBuyConfirm = true
-            } label: {
-                Label("Acheter maintenant", systemImage: "creditcard.fill")
-            }
-            .disabled(isWorking || !canBuyNow)
-
-            Text("Une fois acheté, le statut passera à « Vendue ».")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var auctionBidActionBlock: some View {
-        VStack(alignment: .leading, spacing: 10) {
-
-            let minRequired = minimumBidRequired()
-
-            HStack {
-                Text("Mise minimale")
-                Spacer()
-                Text(String(format: "%.2f $ CAD", minRequired))
-                    .foregroundStyle(.secondary)
-            }
-
-            TextField("Ta mise (CAD)", text: $bidInput)
-                .keyboardType(.decimalPad)
-
-            Button {
-                guard validateBidBeforeConfirm() else { return }
-                showBidConfirm = true
-            } label: {
-                Label("Miser", systemImage: "hammer.fill")
-            }
-            .disabled(isWorking || !canBid)
-
-            Text("Ta mise doit être supérieure à la mise actuelle.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    // MARK: - Firestore live update
-
-    private func startListening() {
-        stopListening()
-        uiErrorText = nil
-
-        listener = db.collection("listings")
-            .document(current.id)
-            .addSnapshotListener { snap, error in
-                if let error {
-                    self.uiErrorText = error.localizedDescription
-                    return
+                if let urlString = current.imageUrl,
+                   let url = URL(string: urlString) {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFit()
+                                .padding(10)
+                        case .failure:
+                            Image(systemName: "photo")
+                                .font(.largeTitle)
+                                .foregroundStyle(.secondary)
+                        default:
+                            ProgressView()
+                        }
+                    }
+                } else {
+                    Image(systemName: "photo")
+                        .font(.largeTitle)
+                        .foregroundStyle(.secondary)
                 }
-                guard let snap, snap.exists else { return }
-                self.current = ListingCloud.fromFirestore(doc: snap)
             }
-    }
+            .frame(height: 320)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.black.opacity(0.10), lineWidth: 1)
+            )
 
-    private func stopListening() {
-        listener?.remove()
-        listener = nil
-    }
+            VStack(alignment: .trailing, spacing: 8) {
 
-    // MARK: - Owner actions
+                if current.shouldShowGradingBadge, let label = current.gradingLabel {
+                    GradingOverlayBadge(label: label, compact: false)
+                }
 
-    private func togglePauseResume() async {
-        guard isOwner else { return }
-        guard canTogglePause else { return }
+                if let badge = current.statusBadge, current.status != "active" {
+                    MyStatusChip(
+                        text: badge.text,
+                        systemImage: badge.icon,
+                        color: badge.color,
+                        backgroundOpacity: badge.backgroundOpacity,
+                        strokeOpacity: badge.strokeOpacity,
+                        isOverlayOnImage: true
+                    )
+                }
 
-        uiErrorText = nil
-        isWorking = true
-        defer { isWorking = false }
-
-        let ref = db.collection("listings").document(current.id)
-        let nextStatus = (current.status == "paused") ? "active" : "paused"
-
-        do {
-            try await ref.updateData([
-                "status": nextStatus,
-                "updatedAt": Timestamp(date: Date())
-            ])
-        } catch {
-            uiErrorText = error.localizedDescription
-        }
-    }
-
-    private func endListingNow() async {
-        guard isOwner else { return }
-        guard canEndNow else { return }
-
-        uiErrorText = nil
-        isWorking = true
-        defer { isWorking = false }
-
-        let ref = db.collection("listings").document(current.id)
-        let now = Timestamp(date: Date())
-
-        do {
-            try await ref.updateData([
-                "status": "ended",
-                "endedAt": now,
-                "updatedAt": now
-            ])
-        } catch {
-            uiErrorText = error.localizedDescription
-        }
-    }
-
-    // MARK: - Buyer actions
-
-    private func validateBuyNowBeforeConfirm() -> Bool {
-        actionError = nil
-        guard canBuyNow else {
-            actionError = "Achat impossible pour cette annonce."
-            return false
-        }
-        return true
-    }
-
-    private func buyNow() async {
-        actionError = nil
-        actionSuccess = nil
-        guard canBuyNow else { return }
-
-        isWorking = true
-        defer { isWorking = false }
-
-        do {
-            try await marketplace.buyNow(listingId: current.id)
-            await MainActor.run {
-                actionSuccess = "Achat complété."
+                if isAuction, isActive, let end = endDate {
+                    EndingSoonOrRemainingChip(endDate: end)
+                }
             }
-        } catch {
-            await MainActor.run {
-                actionError = error.localizedDescription
+            .padding(.top, 10)
+            .padding(.trailing, 10)
+        }
+    }
+
+    private var titleBlock: some View {
+        VStack(alignment: .leading, spacing: 10) {
+
+            Text(current.title)
+                .font(.title3.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 10) {
+                ListingBadgeView(
+                    text: current.typeBadge.text,
+                    systemImage: current.typeBadge.icon,
+                    color: current.typeBadge.color
+                )
+
+                if let u = current.sellerUsername, !u.isEmpty {
+                    Text("@\(u)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 0)
             }
         }
     }
 
-    private func validateBidBeforeConfirm() -> Bool {
-        actionError = nil
+    private var metaBlock: some View {
+        VStack(alignment: .leading, spacing: 10) {
+
+            if isAuction {
+                HStack(spacing: 10) {
+                    infoPill(title: "Mise actuelle", value: money(currentBidCAD))
+                    infoPill(title: "Mises", value: "\(current.bidCount)")
+                }
+
+                if let end = endDate {
+                    infoRow(systemImage: "clock", text: "Fin: \(end.formatted(date: .abbreviated, time: .shortened))")
+                }
+
+            } else {
+                infoPillWide(title: "Prix", value: buyNowPriceCAD > 0 ? money(buyNowPriceCAD) : "Non défini")
+            }
+
+            if current.status == "sold" {
+                let soldPrice = current.finalPriceCAD ?? current.currentBidCAD ?? current.buyNowPriceCAD ?? 0
+                infoRow(systemImage: "checkmark.seal.fill", text: "Vendu • \(money(soldPrice))")
+            }
+
+            if current.status == "ended" {
+                infoRow(systemImage: "flag.checkered", text: "Annonce terminée")
+            }
+
+            if current.status == "paused" {
+                infoRow(systemImage: "pause.circle.fill", text: "Annonce en pause")
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+    }
+
+    private func descriptionBlock(_ desc: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Description")
+                .font(.headline)
+
+            Text(desc)
+                .font(.body)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+    }
+
+    private var actionBlock: some View {
+        VStack(spacing: 10) {
+
+            if uid == nil {
+                actionHint("Connecte-toi pour miser ou acheter.", icon: "person.crop.circle.badge.exclamationmark")
+
+            } else if isOwner {
+                actionHint("C’est ton annonce.", icon: "person.fill.checkmark")
+
+            } else if !isActive || hasEndedByTime {
+                actionHint("Cette annonce n’est plus active.", icon: "xmark.circle.fill")
+
+            } else {
+                if isAuction {
+                    HStack(spacing: 10) {
+                        ActionButton(
+                            title: "Miser",
+                            systemImage: "hammer.fill",
+                            style: .primary,
+                            isLoading: isBidding,
+                            isDisabled: !canBid || isBuying
+                        ) { bidTapped() }
+
+                        if buyNowPriceCAD > 0 {
+                            ActionButton(
+                                title: "Acheter",
+                                systemImage: "cart.fill",
+                                style: .secondary,
+                                isLoading: isBuying,
+                                isDisabled: !canBuyNow || isBidding
+                            ) { buyNowTapped() }
+                        }
+                    }
+
+                    Text("Mise minimale: \(money(nextMinBid))")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 2)
+
+                } else {
+                    ActionButton(
+                        title: "Acheter maintenant",
+                        systemImage: "cart.fill",
+                        style: .primary,
+                        isLoading: isBuying,
+                        isDisabled: !canBuyNow || isBidding
+                    ) { buyNowTapped() }
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+    }
+
+    // MARK: - Bid sheet
+
+    private var bidSheet: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 14) {
+
+                Text(current.title)
+                    .font(.headline)
+                    .lineLimit(2)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Montant")
+                        .font(.subheadline.weight(.semibold))
+
+                    HStack(spacing: 10) {
+                        TextField("\(Int(nextMinBid))", text: $bidAmountText)
+                            .keyboardType(.decimalPad)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(frostedBG)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                        Text("$ CAD")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text("Minimum: \(money(nextMinBid))")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                ActionButton(
+                    title: "Confirmer la mise",
+                    systemImage: "checkmark.circle.fill",
+                    style: .primary,
+                    isLoading: isBidding,
+                    isDisabled: !canBid || isBuying
+                ) { confirmBidFromSheet() }
+            }
+            .padding(16)
+            .navigationTitle("Miser")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Fermer") {
+                        Haptic.light()
+                        showBidSheet = false
+                    }
+                }
+            }
+            .onAppear {
+                bidAmountText = String(Int(nextMinBid))
+            }
+        }
+    }
+
+    // MARK: - Actions
+
+    private func bidTapped() {
         guard canBid else {
-            actionError = "Mise impossible pour cet encan."
-            return false
+            toast = Toast(style: .info, title: "Impossible de miser maintenant.", systemImage: "info.circle")
+            Haptic.error()
+            return
         }
-
-        guard let bid = toDouble(bidInput), bid > 0 else {
-            actionError = "Entre un montant valide (ex: 25)."
-            return false
-        }
-
-        let minReq = minimumBidRequired()
-        if bid <= minReq {
-            actionError = "Ta mise doit être supérieure à \(String(format: "%.2f", minReq)) $ CAD."
-            return false
-        }
-
-        return true
+        Haptic.light()
+        showBidSheet = true
     }
 
-    private func placeBid() async {
-        actionError = nil
-        actionSuccess = nil
-        guard canBid else { return }
+    private func confirmBidFromSheet() {
+        guard let uid else { return }
 
-        guard let bid = toDouble(bidInput), bid > 0 else {
-            actionError = "Entre un montant valide."
+        let raw = bidAmountText
+            .replacingOccurrences(of: ",", with: ".")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let amount = Double(raw), amount > 0 else {
+            toast = Toast(style: .error, title: "Montant invalide.", systemImage: "exclamationmark.triangle.fill")
+            Haptic.error()
             return
         }
 
-        isWorking = true
-        defer { isWorking = false }
+        guard amount >= nextMinBid else {
+            toast = Toast(style: .error, title: "Mise trop basse. Minimum \(money(nextMinBid)).", systemImage: "arrow.up.circle.fill")
+            Haptic.error()
+            return
+        }
 
-        do {
-            try await marketplace.placeBid(listingId: current.id, bidCAD: bid)
-            await MainActor.run {
-                bidInput = ""
-                actionSuccess = "Mise placée ✅"
-            }
-        } catch {
-            await MainActor.run {
-                actionError = error.localizedDescription
+        isBidding = true
+
+        placeBidTransaction(listingId: current.id, uid: uid, amount: amount) { result in
+            DispatchQueue.main.async {
+                self.isBidding = false
+                switch result {
+                case .success:
+                    self.showBidSheet = false
+                    self.toast = Toast(style: .success, title: "Mise envoyée ✅", systemImage: "checkmark.circle.fill")
+                    Haptic.success()
+                case .failure(let err):
+                    self.toast = Toast(style: .error, title: err.localizedDescription, systemImage: "exclamationmark.triangle.fill", duration: 2.8)
+                    Haptic.error()
+                }
             }
         }
     }
 
-    private func minimumBidRequired() -> Double {
-        let starting = current.startingBidCAD ?? 0
-        let currentBid = current.currentBidCAD ?? starting
-        return max(currentBid, starting)
+    private func buyNowTapped() {
+        guard let uid else { return }
+
+        guard canBuyNow else {
+            toast = Toast(style: .info, title: "Impossible d’acheter maintenant.", systemImage: "info.circle")
+            Haptic.error()
+            return
+        }
+
+        guard buyNowPriceCAD > 0 else {
+            toast = Toast(style: .error, title: "Prix d’achat non défini.", systemImage: "exclamationmark.triangle.fill")
+            Haptic.error()
+            return
+        }
+
+        isBuying = true
+        Haptic.light()
+
+        buyNowTransaction(listingId: current.id, uid: uid) { result in
+            DispatchQueue.main.async {
+                self.isBuying = false
+                switch result {
+                case .success:
+                    self.toast = Toast(style: .success, title: "Achat réussi ✅", systemImage: "checkmark.seal.fill")
+                    Haptic.success()
+                case .failure(let err):
+                    self.toast = Toast(style: .error, title: err.localizedDescription, systemImage: "exclamationmark.triangle.fill", duration: 2.8)
+                    Haptic.error()
+                }
+            }
+        }
+    }
+
+    // MARK: - Firestore listener (live listing)
+
+    private func startDocListener() {
+        stopDocListener()
+
+        let ref = Firestore.firestore()
+            .collection(listingsCollection)
+            .document(listing.id)
+
+        docListener = ref.addSnapshotListener { snap, err in
+            if let err {
+                DispatchQueue.main.async {
+                    self.toast = Toast(style: .error, title: err.localizedDescription, systemImage: "exclamationmark.triangle.fill")
+                }
+                return
+            }
+            guard let snap, snap.exists else { return }
+
+            // ✅ IMPORTANT: pas de Codable ici
+            let parsed = ListingCloud.fromFirestore(doc: snap)
+            DispatchQueue.main.async {
+                self.current = parsed
+            }
+        }
+    }
+
+    private func stopDocListener() {
+        docListener?.remove()
+        docListener = nil
+    }
+
+    // MARK: - Firestore transactions
+
+    private func placeBidTransaction(listingId: String, uid: String, amount: Double, completion: @escaping (Result<Void, Error>) -> Void) {
+        let db = Firestore.firestore()
+        let ref = db.collection(listingsCollection).document(listingId)
+
+        db.runTransaction({ txn, errPtr -> Any? in
+            do {
+                let snap = try txn.getDocument(ref)
+
+                guard let data = snap.data() else {
+                    errPtr?.pointee = NSError(domain: "Collectly", code: 404, userInfo: [NSLocalizedDescriptionKey: "Annonce introuvable."])
+                    return nil
+                }
+
+                let status = (data["status"] as? String) ?? "active"
+                let type = (data["type"] as? String) ?? "auction"
+
+                guard status == "active" else {
+                    errPtr?.pointee = NSError(domain: "Collectly", code: 400, userInfo: [NSLocalizedDescriptionKey: "Annonce non active."])
+                    return nil
+                }
+                guard type == "auction" else {
+                    errPtr?.pointee = NSError(domain: "Collectly", code: 400, userInfo: [NSLocalizedDescriptionKey: "Ce n’est pas un encan."])
+                    return nil
+                }
+
+                if let ts = data["endDate"] as? Timestamp {
+                    let end = ts.dateValue()
+                    guard end > Date() else {
+                        errPtr?.pointee = NSError(domain: "Collectly", code: 400, userInfo: [NSLocalizedDescriptionKey: "Encan terminé."])
+                        return nil
+                    }
+                }
+
+                let current = (data["currentBidCAD"] as? Double)
+                    ?? (data["startingBidCAD"] as? Double)
+                    ?? 0
+
+                let minNext = max(current + minBidIncrement, minBidIncrement)
+
+                guard amount >= minNext else {
+                    errPtr?.pointee = NSError(domain: "Collectly", code: 400, userInfo: [NSLocalizedDescriptionKey: "Mise trop basse (min \(Int(minNext))$)."])
+                    return nil
+                }
+
+                let bidCount = (data["bidCount"] as? Int) ?? 0
+
+                txn.updateData([
+                    "currentBidCAD": amount,
+                    "bidCount": bidCount + 1,
+                    "lastBidderId": uid,
+                    "updatedAt": Timestamp(date: Date())
+                ], forDocument: ref)
+
+                return nil
+            } catch {
+                errPtr?.pointee = error as NSError
+                return nil
+            }
+        }, completion: { _, error in
+            if let error { completion(.failure(error)) }
+            else { completion(.success(())) }
+        })
+    }
+
+    private func buyNowTransaction(listingId: String, uid: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        let db = Firestore.firestore()
+        let ref = db.collection(listingsCollection).document(listingId)
+
+        db.runTransaction({ txn, errPtr -> Any? in
+            do {
+                let snap = try txn.getDocument(ref)
+
+                guard let data = snap.data() else {
+                    errPtr?.pointee = NSError(domain: "Collectly", code: 404, userInfo: [NSLocalizedDescriptionKey: "Annonce introuvable."])
+                    return nil
+                }
+
+                let status = (data["status"] as? String) ?? "active"
+                guard status == "active" else {
+                    errPtr?.pointee = NSError(domain: "Collectly", code: 400, userInfo: [NSLocalizedDescriptionKey: "Annonce non active."])
+                    return nil
+                }
+
+                if let ts = data["endDate"] as? Timestamp {
+                    let end = ts.dateValue()
+                    guard end > Date() else {
+                        errPtr?.pointee = NSError(domain: "Collectly", code: 400, userInfo: [NSLocalizedDescriptionKey: "Annonce terminée."])
+                        return nil
+                    }
+                }
+
+                let price = (data["buyNowPriceCAD"] as? Double) ?? 0
+                guard price > 0 else {
+                    errPtr?.pointee = NSError(domain: "Collectly", code: 400, userInfo: [NSLocalizedDescriptionKey: "Prix d’achat non défini."])
+                    return nil
+                }
+
+                let sellerId = (data["sellerId"] as? String) ?? ""
+                guard sellerId != uid else {
+                    errPtr?.pointee = NSError(domain: "Collectly", code: 400, userInfo: [NSLocalizedDescriptionKey: "Tu ne peux pas acheter ta propre annonce."])
+                    return nil
+                }
+
+                txn.updateData([
+                    "status": "sold",
+                    "buyerId": uid,
+                    "soldAt": Timestamp(date: Date()),
+                    "finalPriceCAD": price,
+                    "updatedAt": Timestamp(date: Date())
+                ], forDocument: ref)
+
+                return nil
+            } catch {
+                errPtr?.pointee = error as NSError
+                return nil
+            }
+        }, completion: { _, error in
+            if let error { completion(.failure(error)) }
+            else { completion(.success(())) }
+        })
     }
 
     // MARK: - Helpers
 
-    private func statusLabel(_ s: String) -> String {
-        switch s {
-        case "active": return "Active"
-        case "paused": return "En pause"
-        case "sold": return "Vendue"
-        case "ended": return "Terminée"
-        default: return s
+    private func money(_ value: Double) -> String {
+        return String(format: "%.0f $ CAD", value)
+    }
+
+    private func infoRow(systemImage: String, text: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .foregroundStyle(.secondary)
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
         }
     }
 
-    private func timeRemainingText(until end: Date) -> String {
-        let now = Date()
-        if end <= now { return "Terminé" }
-
-        let diff = Calendar.current.dateComponents([.day, .hour, .minute], from: now, to: end)
-        let d = diff.day ?? 0
-        let h = diff.hour ?? 0
-        let m = diff.minute ?? 0
-
-        if d > 0 { return "\(d) j \(h) h" }
-        if h > 0 { return "\(h) h \(m) min" }
-        return "\(max(m, 1)) min"
+    private func infoPill(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.headline.weight(.semibold))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(frostedBG)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    private func toDouble(_ s: String) -> Double? {
-        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        if t.isEmpty { return nil }
-        return Double(t.replacingOccurrences(of: ",", with: "."))
+    private func infoPillWide(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.headline.weight(.semibold))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(frostedBG)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func actionHint(_ text: String, icon: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .foregroundStyle(.secondary)
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 4)
     }
 }
 
-// MARK: - Remote hero image
+// MARK: - Micro components (local)
 
-private struct ListingRemoteHeroImage: View {
-    let urlString: String?
+private struct ActionButton: View {
+
+    enum Style { case primary, secondary }
+
+    let title: String
+    let systemImage: String
+    let style: Style
+    let isLoading: Bool
+    let isDisabled: Bool
+    let action: () -> Void
 
     var body: some View {
-        Group {
-            if let urlString, let url = URL(string: urlString) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFit()
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                    case .failure:
-                        placeholder
-                    default:
-                        ProgressView()
-                            .padding(.vertical, 18)
-                    }
+        Button { action() } label: {
+            HStack(spacing: 10) {
+                if isLoading {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: systemImage)
+                        .font(.subheadline.weight(.semibold))
                 }
-            } else {
-                placeholder
+
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity)
         }
-    }
-
-    private var placeholder: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(.secondary.opacity(0.12))
-
-            VStack(spacing: 10) {
-                Image(systemName: "photo")
-                    .font(.title2)
-                    .foregroundStyle(.secondary)
-
-                Text("Aucune image")
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(height: 240)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .buttonStyle(UXButtonStyle(style: style, isDisabled: isDisabled || isLoading))
+        .disabled(isDisabled || isLoading)
     }
 }
+
+private struct UXButtonStyle: ButtonStyle {
+
+    let style: ActionButton.Style
+    let isDisabled: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        let pressed = configuration.isPressed
+
+        return configuration.label
+            .foregroundStyle(foregroundColor(pressed: pressed))
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(backgroundColor(pressed: pressed))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(borderColor, lineWidth: 1)
+            )
+            .opacity(isDisabled ? 0.55 : (pressed ? 0.92 : 1.0))
+            .scaleEffect(pressed ? 0.985 : 1.0)
+            .animation(.spring(response: 0.22, dampingFraction: 0.86), value: pressed)
+    }
+
+    private var borderColor: Color {
+        switch style {
+        case .primary: return Color.white.opacity(0.15)
+        case .secondary: return Color.black.opacity(0.10)
+        }
+    }
+
+    private func backgroundColor(pressed: Bool) -> Color {
+        switch style {
+        case .primary:
+            return pressed ? Color.blue.opacity(0.88) : Color.blue
+        case .secondary:
+            return pressed ? Color(.secondarySystemGroupedBackground).opacity(0.92) : Color(.secondarySystemGroupedBackground)
+        }
+    }
+
+    private func foregroundColor(pressed: Bool) -> Color {
+        switch style {
+        case .primary: return .white
+        case .secondary: return .primary
+        }
+    }
+}
+
+private struct EndingSoonOrRemainingChip: View {
+
+    let endDate: Date
+    private let soonThreshold: TimeInterval = 24 * 60 * 60
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            let remaining = endDate.timeIntervalSince(context.date)
+
+            if remaining <= 0 {
+                chip(text: "Terminé", sf: "xmark.circle.fill", color: .secondary)
+            } else if remaining <= soonThreshold {
+                chip(text: "Se termine bientôt", sf: "clock.fill", color: .orange)
+            } else {
+                chip(text: "Reste \(formatRemaining(remaining))", sf: "clock", color: .secondary)
+            }
+        }
+    }
+
+    private func chip(text: String, sf: String, color: Color) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: sf).font(.caption2)
+            Text(text)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Capsule().fill(Color(.systemBackground).opacity(0.92)))
+        .overlay(Capsule().stroke(color.opacity(0.28), lineWidth: 1))
+        .shadow(color: Color.black.opacity(0.10), radius: 2, x: 0, y: 1)
+    }
+
+    private func formatRemaining(_ seconds: TimeInterval) -> String {
+        let s = max(0, Int(seconds))
+        let m = s / 60
+        let h = m / 60
+        let d = h / 24
+
+        if d > 0 { return "\(d)j \(h % 24)h" }
+        if h > 0 { return "\(h)h \(m % 60)m" }
+        return "\(m)m"
+    }
+}
+

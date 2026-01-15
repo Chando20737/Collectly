@@ -18,7 +18,7 @@ struct MarketplaceCloudView: View {
     @State private var query: String = ""
     @State private var filter: MarketFilter = .all
 
-    // ✅ NEW: tri
+    // ✅ Tri
     @AppStorage("marketplaceSortMode") private var sortRaw: String = SortMode.defaultSoonestFirst.rawValue
     private var sortMode: SortMode { SortMode(rawValue: sortRaw) ?? .defaultSoonestFirst }
 
@@ -34,14 +34,12 @@ struct MarketplaceCloudView: View {
         var id: String { rawValue }
     }
 
-    // ✅ NEW: options de tri
     enum SortMode: String, CaseIterable, Identifiable {
         case defaultSoonestFirst = "Par défaut (fin bientôt d’abord)"
         case newest = "Plus récents"
         case priceLow = "Prix / mise: ↑"
         case priceHigh = "Prix / mise: ↓"
         case endingSoon = "Fin bientôt (encans)"
-
         var id: String { rawValue }
     }
 
@@ -83,7 +81,6 @@ struct MarketplaceCloudView: View {
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
 
-                    // ✅ NEW: menu tri
                     Menu {
                         ForEach(SortMode.allCases) { m in
                             Button {
@@ -144,8 +141,16 @@ struct MarketplaceCloudView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
-            .background(.thinMaterial)
+            .background(frostedBG)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+    }
+
+    private var frostedBG: AnyShapeStyle {
+        if #available(iOS 15.0, *) {
+            return AnyShapeStyle(.ultraThinMaterial)
+        } else {
+            return AnyShapeStyle(Color(.secondarySystemBackground).opacity(0.95))
         }
     }
 
@@ -158,7 +163,6 @@ struct MarketplaceCloudView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
 
-                    // ✅ Sections: on respecte le filtre + tri (mais on garde 2 sections si "Tous")
                     if filter == .all {
                         let a = sortedAuctions
                         let f = sortedFixedPrice
@@ -200,7 +204,6 @@ struct MarketplaceCloudView: View {
                         }
 
                     } else {
-                        // Encans ou Prix fixe seulement => une liste unique triée
                         LazyVGrid(columns: cols, spacing: 10) {
                             ForEach(sortedFilteredListings) { listing in
                                 NavigationLink {
@@ -233,11 +236,11 @@ struct MarketplaceCloudView: View {
         return Array(repeating: GridItem(.flexible(), spacing: spacing), count: count)
     }
 
-    // MARK: - LIST MODE
+    // MARK: - LIST MODE (✅ séparateurs)
 
     private var listMode: some View {
         ScrollView {
-            LazyVStack(spacing: 10) {
+            LazyVStack(spacing: 0) { // ✅ 0, car Divider gère la séparation
 
                 if filter == .all {
                     let a = sortedAuctions
@@ -245,34 +248,58 @@ struct MarketplaceCloudView: View {
 
                     if !a.isEmpty {
                         sectionHeader(title: "Encans", count: a.count, icon: "hammer.fill")
-                        ForEach(a) { listing in
+                            .padding(.bottom, 4)
+
+                        ForEach(Array(a.enumerated()), id: \.element.id) { idx, listing in
                             NavigationLink {
                                 ListingCloudDetailView(listing: listing)
                             } label: {
-                                MarketplaceListRow(listing: listing, miseText: miseText)
+                                MarketplaceListRowWithDivider(
+                                    listing: listing,
+                                    miseText: miseText,
+                                    showDivider: idx != a.count - 1
+                                )
                             }
                             .buttonStyle(ListPressableLinkStyle())
+                        }
+
+                        if !f.isEmpty {
+                            // petite séparation entre sections
+                            Divider()
+                                .padding(.vertical, 8)
+                                .padding(.leading, 12)
                         }
                     }
 
                     if !f.isEmpty {
                         sectionHeader(title: "Acheter maintenant", count: f.count, icon: "tag.fill")
-                        ForEach(f) { listing in
+                            .padding(.bottom, 4)
+
+                        ForEach(Array(f.enumerated()), id: \.element.id) { idx, listing in
                             NavigationLink {
                                 ListingCloudDetailView(listing: listing)
                             } label: {
-                                MarketplaceListRow(listing: listing, miseText: miseText)
+                                MarketplaceListRowWithDivider(
+                                    listing: listing,
+                                    miseText: miseText,
+                                    showDivider: idx != f.count - 1
+                                )
                             }
                             .buttonStyle(ListPressableLinkStyle())
                         }
                     }
 
                 } else {
-                    ForEach(sortedFilteredListings) { listing in
+                    let list = sortedFilteredListings
+                    ForEach(Array(list.enumerated()), id: \.element.id) { idx, listing in
                         NavigationLink {
                             ListingCloudDetailView(listing: listing)
                         } label: {
-                            MarketplaceListRow(listing: listing, miseText: miseText)
+                            MarketplaceListRowWithDivider(
+                                listing: listing,
+                                miseText: miseText,
+                                showDivider: idx != list.count - 1
+                            )
                         }
                         .buttonStyle(ListPressableLinkStyle())
                     }
@@ -320,7 +347,6 @@ struct MarketplaceCloudView: View {
         sort(list: baseFiltered, mode: sortMode)
     }
 
-    // ✅ Pour les sections quand filtre == .all
     private var sortedAuctions: [ListingCloud] {
         sort(list: baseFiltered.filter { $0.type == "auction" }, mode: sortMode)
     }
@@ -332,16 +358,10 @@ struct MarketplaceCloudView: View {
     private func sort(list: [ListingCloud], mode: SortMode) -> [ListingCloud] {
         switch mode {
 
-        // ✅ DEFAULT demandé:
-        // 1) Encans fin bientôt (endDate la plus proche)
-        // 2) Autres encans (createdAt desc)
-        // 3) Prix fixe (createdAt desc)
         case .defaultSoonestFirst:
             return list.sorted { a, b in
-                // Encans avant fixed
                 if a.type != b.type { return a.type == "auction" }
 
-                // Dans encans: fin la plus proche d'abord (si endDate)
                 if a.type == "auction" && b.type == "auction" {
                     let da = a.endDate ?? .distantFuture
                     let db = b.endDate ?? .distantFuture
@@ -349,16 +369,14 @@ struct MarketplaceCloudView: View {
                     return a.createdAt > b.createdAt
                 }
 
-                // Dans fixed: plus récents
                 return a.createdAt > b.createdAt
             }
 
         case .endingSoon:
-            // Encans uniquement: fin la plus proche d'abord; sinon on garde la logique stable
             return list.sorted { a, b in
                 let aIsAuction = (a.type == "auction")
                 let bIsAuction = (b.type == "auction")
-                if aIsAuction != bIsAuction { return aIsAuction } // encans avant fixed
+                if aIsAuction != bIsAuction { return aIsAuction }
 
                 if aIsAuction && bIsAuction {
                     let da = a.endDate ?? .distantFuture
@@ -426,10 +444,10 @@ struct MarketplaceCloudView: View {
 }
 
 //
-// MARK: - LIST ROW
+// MARK: - LIST ROW (COMPACT)
 //
 
-private struct MarketplaceListRow: View {
+private struct MarketplaceListRowCompact: View {
     let listing: ListingCloud
     let miseText: (Int) -> String
 
@@ -443,77 +461,102 @@ private struct MarketplaceListRow: View {
         return remaining > 0 && remaining <= endingSoonThreshold
     }
 
+    private var priceLine: String {
+        if listing.type == "fixedPrice" {
+            if let p = listing.buyNowPriceCAD {
+                return String(format: "%.0f $ CAD", p)
+            }
+            return "Prix non défini"
+        } else {
+            let current = listing.currentBidCAD ?? listing.startingBidCAD ?? 0
+            return String(format: "Mise: %.0f $ CAD • %@",
+                          current,
+                          miseText(listing.bidCount))
+        }
+    }
+
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .top, spacing: 12) {
 
             ZStack(alignment: .topTrailing) {
-                MarketplaceSlabThumb(urlString: listing.imageUrl, size: CGSize(width: 78, height: 112))
+                MarketplaceSlabThumb(urlString: listing.imageUrl, size: CGSize(width: 66, height: 92))
                     .zIndex(0)
 
-                VStack(alignment: .trailing, spacing: 6) {
-                    if listing.shouldShowGradingBadge, let label = listing.gradingLabel {
-                        GradingOverlayBadge(label: label, compact: true)
-                    }
-                    if isEndingSoon {
-                        EndingSoonBadge(compact: true)
-                    }
+                if listing.shouldShowGradingBadge, let label = listing.gradingLabel {
+                    GradingOverlayBadge(label: label, compact: true)
+                        .padding(.top, 6)
+                        .padding(.trailing, 6)
+                        .zIndex(10)
                 }
-                .padding(.top, 6)
-                .padding(.trailing, 6)
-                .zIndex(10)
             }
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
+
                 Text(listing.title)
                     .font(.headline)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
 
-                ListingBadgeView(
-                    text: listing.typeBadge.text,
-                    systemImage: listing.typeBadge.icon,
-                    color: listing.typeBadge.color
-                )
+                HStack(spacing: 8) {
+                    ListingBadgeView(
+                        text: listing.typeBadge.text,
+                        systemImage: listing.typeBadge.icon,
+                        color: listing.typeBadge.color
+                    )
 
-                if listing.type == "fixedPrice" {
-                    if let p = listing.buyNowPriceCAD {
-                        Text(String(format: "%.0f $ CAD", p))
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("Prix non défini")
-                            .foregroundStyle(.secondary)
+                    if isEndingSoon {
+                        EndingSoonChipInline()
                     }
 
-                    if let u = listing.sellerUsername, !u.isEmpty {
-                        Text("@\(u)")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                } else {
-                    let current = listing.currentBidCAD ?? listing.startingBidCAD ?? 0
-                    Text(String(format: "Mise: %.0f $ CAD • %@", current, miseText(listing.bidCount)))
+                    Spacer(minLength: 0)
+                }
+
+                Text(priceLine)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                if listing.type == "auction", let end = listing.endDate {
+                    Text("Fin: \(end.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
 
-                    if let end = listing.endDate {
-                        Text("Se termine le \(end.formatted(date: .abbreviated, time: .shortened))")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if let u = listing.sellerUsername, !u.isEmpty {
-                        Text("@\(u)")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
+                if let u = listing.sellerUsername, !u.isEmpty {
+                    Text("@\(u)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
 
-            Spacer()
+            Spacer(minLength: 0)
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, 6)
         .contentShape(Rectangle())
+    }
+}
+
+//
+// MARK: - LIST ROW + DIVIDER
+//
+
+private struct MarketplaceListRowWithDivider: View {
+    let listing: ListingCloud
+    let miseText: (Int) -> String
+    let showDivider: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            MarketplaceListRowCompact(listing: listing, miseText: miseText)
+
+            if showDivider {
+                Divider()
+                    .padding(.leading, 66 + 12 + 4) // thumb + spacing + petite marge => divider alignée au texte
+                    .opacity(0.5)
+            }
+        }
     }
 }
 
@@ -550,7 +593,7 @@ private struct MarketplaceGridCardDense: View {
                             GradingOverlayBadge(label: label, compact: false)
                         }
                         if isEndingSoon {
-                            EndingSoonBadge(compact: false)
+                            EndingSoonBadgeOverlay(compact: false)
                         }
                     }
                     .padding(.top, 8)
@@ -657,10 +700,10 @@ private struct MarketplaceSlabThumb: View {
 }
 
 //
-// MARK: - Ending Soon Badge (opaque)
+// MARK: - Ending Soon (Grid overlay + List inline chip)
 //
 
-private struct EndingSoonBadge: View {
+private struct EndingSoonBadgeOverlay: View {
     let compact: Bool
 
     var body: some View {
@@ -683,6 +726,29 @@ private struct EndingSoonBadge: View {
         )
         .foregroundStyle(Color.orange)
         .shadow(color: Color.black.opacity(0.10), radius: 2, x: 0, y: 1)
+    }
+}
+
+private struct EndingSoonChipInline: View {
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "clock")
+                .font(.caption2.weight(.semibold))
+            Text("Bientôt")
+                .font(.caption2.weight(.semibold))
+                .lineLimit(1)
+        }
+        .foregroundStyle(Color.orange)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(
+            Capsule()
+                .fill(Color.orange.opacity(0.12))
+        )
+        .overlay(
+            Capsule()
+                .stroke(Color.orange.opacity(0.30), lineWidth: 1)
+        )
     }
 }
 

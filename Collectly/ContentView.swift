@@ -8,32 +8,23 @@ import SwiftUI
 import SwiftData
 import UIKit
 import PhotosUI
+import FirebaseAuth
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
-    @EnvironmentObject private var session: SessionStore   // ✅ AJOUT
+    @EnvironmentObject private var session: SessionStore
 
     @Query(sort: \CardItem.createdAt, order: .reverse)
     private var cards: [CardItem]
 
     @State private var searchText: String = ""
-
-    // ✅ mode liste vs grille
     @State private var viewMode: ViewMode = .grid
-
-    // ✅ tri
     @State private var sort: SortOption = .newest
-
-    // ✅ filtre
     @State private var filter: FilterOption = .all
 
-    // ✅ erreurs UI
     @State private var uiErrorText: String? = nil
-
-    // ✅ Sheet "Ajouter"
     @State private var showAddSheet = false
 
-    // ✅ Marketplace (sync suppression)
     private let marketplace = MarketplaceService()
 
     enum ViewMode: String, CaseIterable, Identifiable {
@@ -87,8 +78,9 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
 
-            // ✅ B = déconnecté -> on CACHE la collection
+            // ✅ Déconnecté -> on cache la collection
             if session.user == nil {
+
                 ContentUnavailableView(
                     "Ma collection",
                     systemImage: "rectangle.stack",
@@ -97,11 +89,10 @@ struct ContentView: View {
                 .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    // On laisse le + visible, mais désactivé, pour que ce soit clair.
+
+                    // ✅ + visible mais désactivé
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            showAddSheet = true
-                        } label: {
+                        Button { showAddSheet = true } label: {
                             Image(systemName: "plus")
                         }
                         .disabled(true)
@@ -110,7 +101,8 @@ struct ContentView: View {
                 }
 
             } else {
-                // ✅ Connecté -> comportement normal
+
+                // ✅ Connecté
                 let items = filteredSortedAndFilteredCards
 
                 Group {
@@ -123,7 +115,6 @@ struct ContentView: View {
                     } else {
                         VStack(spacing: 0) {
 
-                            // ✅ Petit header compact
                             CollectionMiniHeader(
                                 count: items.count,
                                 hasActiveFilter: filter != .all,
@@ -133,7 +124,6 @@ struct ContentView: View {
                             .padding(.top, 8)
                             .padding(.bottom, 6)
 
-                            // ✅ Sélecteur Grille / Liste
                             Picker("Affichage", selection: $viewMode) {
                                 ForEach(ViewMode.allCases) { m in
                                     Text(m.rawValue).tag(m)
@@ -199,9 +189,7 @@ struct ContentView: View {
 
                     // ✅ Ajouter
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            showAddSheet = true
-                        } label: {
+                        Button { showAddSheet = true } label: {
                             Image(systemName: "plus")
                         }
                         .accessibilityLabel("Ajouter une carte")
@@ -220,7 +208,6 @@ struct ContentView: View {
                 }
             }
         }
-        // Note: pas de sheet AddCardView quand déconnecté, parce que showAddSheet reste false et le bouton est disabled
     }
 
     // MARK: - Grid
@@ -422,8 +409,7 @@ private struct CollectionMiniHeader: View {
         var body: some View {
             HStack(spacing: 6) {
                 Image(systemName: systemImage)
-                Text(text)
-                    .lineLimit(1)
+                Text(text).lineLimit(1)
             }
             .font(.caption2.weight(.semibold))
             .foregroundStyle(.secondary)
@@ -600,7 +586,6 @@ private extension String {
     }
 }
 
-/// ✅ Helper local pour calculer "PSA 10" côté CardItem (sans toucher au modèle)
 private extension CardItem {
     var gradingLabel: String? {
         let g = (gradeValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

@@ -7,25 +7,19 @@
 import SwiftUI
 
 struct RootView: View {
-
-    @EnvironmentObject private var session: SessionStore
-
     var body: some View {
         TabView {
 
-            // ✅ Ma collection (clean)
             ContentView()
                 .tabItem {
                     Label("Ma collection", systemImage: "rectangle.stack")
                 }
 
-            // ✅ Marketplace
-            MarketplaceView()
+            MarketplaceCloudView()
                 .tabItem {
-                    Label("Marketplace", systemImage: "cart")
+                    Label("Marketplace", systemImage: "storefront")
                 }
 
-            // ✅ Mes annonces (hub: Mes ventes / Mes enchères)
             MyListingsHubView()
                 .tabItem {
                     Label("Mes annonces", systemImage: "tray.full")

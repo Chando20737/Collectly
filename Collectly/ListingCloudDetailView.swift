@@ -35,7 +35,7 @@ struct ListingCloudDetailView: View {
         _current = State(initialValue: listing)
     }
 
-    // MARK: - Bindings (évite SwiftUI type-check problems)
+    // MARK: - Bindings
 
     private var actionErrorPresented: Binding<Bool> {
         Binding(
@@ -55,6 +55,121 @@ struct ListingCloudDetailView: View {
 
     private func misesText(_ count: Int) -> String {
         return count <= 1 ? "\(count) mise" : "\(count) mises"
+    }
+
+    // MARK: - Derived
+
+    private var isOwner: Bool {
+        guard let uid = Auth.auth().currentUser?.uid else { return false }
+        return current.sellerId == uid
+    }
+
+    private var isAuction: Bool { current.type == "auction" }
+    private var isFixed: Bool { current.type == "fixedPrice" }
+
+    private var isClosed: Bool {
+        current.status == "sold" || current.status == "ended"
+    }
+
+    private var resultTitle: String? {
+        switch current.status {
+        case "sold": return "Vendue"
+        case "ended": return "Terminée"
+        default: return nil
+        }
+    }
+
+    private var resultSubtitle: String? {
+        if current.status == "sold" {
+            if let u = current.buyerUsername, !u.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return "Vendu à @\(u)"
+            }
+            if let _ = current.buyerId {
+                return "Vendu"
+            }
+            return "Vendu"
+        }
+        if current.status == "ended" {
+            return "Terminée sans vente"
+        }
+        return nil
+    }
+
+    // MARK: - Buyer / Owner rules
+
+    private var canTogglePause: Bool {
+        if current.status == "sold" || current.status == "ended" { return false }
+        if current.type == "auction" { return current.bidCount == 0 }
+        return true
+    }
+
+    private var canEndNow: Bool {
+        if current.status == "sold" || current.status == "ended" { return false }
+
+        if current.type == "fixedPrice" {
+            return current.status == "active" || current.status == "paused"
+        }
+
+        if current.type == "auction" {
+            return (current.status == "active" || current.status == "paused") && current.bidCount == 0
+        }
+
+        return false
+    }
+
+    private var canInteractAsBuyer: Bool {
+        guard current.status == "active" else { return false }
+
+        if current.type == "auction" {
+            guard let end = current.endDate else { return false }
+            return end > Date()
+        }
+        return true
+    }
+
+    private var canBuyNow: Bool {
+        guard !isOwner else { return false }
+        guard current.type == "fixedPrice" else { return false }
+        guard current.status == "active" else { return false }
+        let p = current.buyNowPriceCAD ?? 0
+        return p > 0
+    }
+
+    private var canBid: Bool {
+        guard !isOwner else { return false }
+        guard current.type == "auction" else { return false }
+        guard current.status == "active" else { return false }
+        guard let end = current.endDate, end > Date() else { return false }
+        return true
+    }
+
+    private var buyerDisabledHint: String {
+        if current.status != "active" {
+            if current.status == "sold" { return "Cette annonce est vendue." }
+            if current.status == "ended" { return "Cette annonce est terminée." }
+            if current.status == "paused" { return "Cette annonce est en pause." }
+            return "Cette annonce n’est pas active."
+        }
+        if current.type == "auction" && (current.endDate ?? Date()) <= Date() {
+            return "Cet encan est terminé."
+        }
+        return "Action indisponible."
+    }
+
+    private var ownerHintText: String {
+        if current.status == "paused" {
+            return "En pause: l’annonce n’apparaît plus dans Marketplace, mais reste dans « Mes annonces »."
+        }
+        if current.status == "active" {
+            return "Active: visible dans Marketplace."
+        }
+        if current.status == "sold" {
+            return "Vendue: aucune modification possible."
+        }
+        if current.status == "ended" {
+            return "Terminée: aucune modification possible."
+        }
+        return ""
     }
 
     var body: some View {
@@ -78,13 +193,80 @@ struct ListingCloudDetailView: View {
                 }
             }
 
+            // MARK: - Result (REAL STATES)
+            if let title = resultTitle {
+                Section("Résultat") {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("État")
+                        Spacer()
+                        Text(title)
+                            .foregroundStyle(current.status == "sold" ? .purple : .red)
+                            .font(.headline)
+                    }
+
+                    if let sub = resultSubtitle {
+                        Text(sub)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if current.status == "sold" {
+                        if let p = current.finalPriceCAD {
+                            HStack {
+                                Text("Prix final")
+                                Spacer()
+                                Text(String(format: "%.2f $ CAD", p))
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else if isFixed, let p = current.buyNowPriceCAD {
+                            HStack {
+                                Text("Prix")
+                                Spacer()
+                                Text(String(format: "%.2f $ CAD", p))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        if let when = current.soldAt {
+                            HStack {
+                                Text("Vendu le")
+                                Spacer()
+                                Text(when.formatted(date: .abbreviated, time: .shortened))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+
+                    if current.status == "ended" {
+                        if let when = current.endedAt {
+                            HStack {
+                                Text("Terminé le")
+                                Spacer()
+                                Text(when.formatted(date: .abbreviated, time: .shortened))
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else if isAuction, let end = current.endDate {
+                            HStack {
+                                Text("Fin prévue")
+                                Spacer()
+                                Text(end.formatted(date: .abbreviated, time: .shortened))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+
+                    Text("Cet état est déterminé automatiquement et ne peut pas être modifié.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             // MARK: - Listing info
             Section("Annonce") {
 
                 HStack {
                     Text("Type")
                     Spacer()
-                    Text(current.type == "fixedPrice" ? "Prix fixe" : "Encan")
+                    Text(isFixed ? "Prix fixe" : "Encan")
                         .foregroundStyle(.secondary)
                 }
 
@@ -95,7 +277,7 @@ struct ListingCloudDetailView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if current.type == "fixedPrice" {
+                if isFixed {
                     HStack {
                         Text("Prix")
                         Spacer()
@@ -132,7 +314,7 @@ struct ListingCloudDetailView: View {
             // MARK: - Buyer actions
             if !isOwner {
                 Section("Actions") {
-                    if current.type == "fixedPrice" {
+                    if isFixed {
                         buyNowActionBlock
                     } else {
                         auctionBidActionBlock
@@ -290,85 +472,6 @@ struct ListingCloudDetailView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
-    }
-
-    // MARK: - Ownership & buyer rules
-
-    private var isOwner: Bool {
-        guard let uid = Auth.auth().currentUser?.uid else { return false }
-        return current.sellerId == uid
-    }
-
-    private var canTogglePause: Bool {
-        if current.status == "sold" || current.status == "ended" { return false }
-        if current.type == "auction" { return current.bidCount == 0 }
-        return true
-    }
-
-    private var canEndNow: Bool {
-        if current.status == "sold" || current.status == "ended" { return false }
-
-        if current.type == "fixedPrice" {
-            return current.status == "active" || current.status == "paused"
-        }
-
-        if current.type == "auction" {
-            return (current.status == "active" || current.status == "paused") && current.bidCount == 0
-        }
-
-        return false
-    }
-
-    private var canInteractAsBuyer: Bool {
-        guard current.status == "active" else { return false }
-
-        if current.type == "auction" {
-            guard let end = current.endDate else { return false }
-            return end > Date()
-        }
-        return true
-    }
-
-    private var canBuyNow: Bool {
-        guard !isOwner else { return false }
-        guard current.type == "fixedPrice" else { return false }
-        guard current.status == "active" else { return false }
-        let p = current.buyNowPriceCAD ?? 0
-        return p > 0
-    }
-
-    private var canBid: Bool {
-        guard !isOwner else { return false }
-        guard current.type == "auction" else { return false }
-        guard current.status == "active" else { return false }
-        guard let end = current.endDate, end > Date() else { return false }
-        return true
-    }
-
-    private var buyerDisabledHint: String {
-        if current.status != "active" {
-            return "Cette annonce n’est pas active."
-        }
-        if current.type == "auction" && (current.endDate ?? Date()) <= Date() {
-            return "Cet encan est terminé."
-        }
-        return "Action indisponible."
-    }
-
-    private var ownerHintText: String {
-        if current.status == "paused" {
-            return "En pause: l’annonce n’apparaît plus dans Marketplace, mais reste dans « Mes annonces »."
-        }
-        if current.status == "active" {
-            return "Active: visible dans Marketplace."
-        }
-        if current.status == "sold" {
-            return "Vendue: aucune modification possible."
-        }
-        if current.status == "ended" {
-            return "Terminée: aucune modification possible."
-        }
-        return ""
     }
 
     // MARK: - Firestore live update
@@ -605,4 +708,3 @@ private struct ListingRemoteHeroImage: View {
         .padding(.vertical, 8)
     }
 }
-

@@ -8,7 +8,6 @@ import SwiftUI
 import SwiftData
 import UIKit
 import PhotosUI
-import FirebaseAuth
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext

@@ -51,6 +51,13 @@ struct ListingCloud: Identifiable, Hashable {
     let gradeValue: String?
     let certificationNumber: String?
 
+    // MARK: - ✅ Real outcome fields (server truth)
+    let buyerId: String?
+    let buyerUsername: String?
+    let finalPriceCAD: Double?
+    let soldAt: Date?
+    let endedAt: Date?
+
     // MARK: - UI helpers
 
     struct Badge: Hashable {
@@ -115,6 +122,13 @@ struct ListingCloud: Identifiable, Hashable {
 
         let isGraded = (data["isGraded"] as? Bool) ?? false
 
+        // ✅ Real outcome fields
+        let buyerId = (data["buyerId"] as? String)
+        let buyerUsername = (data["buyerUsername"] as? String)
+        let finalPriceCAD = readDouble(data["finalPriceCAD"])
+        let soldAt = (data["soldAt"] as? Timestamp)?.dateValue()
+        let endedAt = (data["endedAt"] as? Timestamp)?.dateValue()
+
         return ListingCloud(
             id: doc.documentID,
             sellerId: (data["sellerId"] as? String) ?? "",
@@ -145,7 +159,13 @@ struct ListingCloud: Identifiable, Hashable {
             isGraded: isGraded,
             gradingCompany: data["gradingCompany"] as? String,
             gradeValue: data["gradeValue"] as? String,
-            certificationNumber: data["certificationNumber"] as? String
+            certificationNumber: data["certificationNumber"] as? String,
+
+            buyerId: buyerId,
+            buyerUsername: buyerUsername,
+            finalPriceCAD: finalPriceCAD,
+            soldAt: soldAt,
+            endedAt: endedAt
         )
     }
 

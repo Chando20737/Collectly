@@ -152,6 +152,11 @@ struct MyDealsCloudView: View {
                                         )
                                     }
                                     .buttonStyle(MyDealsPressableStyle())
+
+                                    // ✅ séparateur léger (plus clean que couleurs alternées)
+                                    Divider()
+                                        .opacity(0.25)
+                                        .padding(.leading, 102) // aligne avec le texte (après thumbnail)
                                 }
                                 Spacer(minLength: 12)
                             }
@@ -172,7 +177,6 @@ struct MyDealsCloudView: View {
                 }
             }
             .onAppear {
-                // ✅ S’assure qu’on ouvre le bon tab quand on arrive via le Hub
                 tab = initialTab
                 startListening()
             }
@@ -197,7 +201,8 @@ struct MyDealsCloudView: View {
         }
 
         if tab == .bids {
-            // ✅ Mes enchères (MVP): auctions où tu es lastBidderId
+
+            // ✅ Mes enchères (MVP): auctions où tu es lastBidderId (filtré côté repo)
             list = list.filter { $0.type == "auction" }
 
             switch bidsFilter {
@@ -207,31 +212,38 @@ struct MyDealsCloudView: View {
                     guard let end = l.endDate else { return true }
                     return end > now
                 }
-                // tri: fin bientôt
-                list.sort { a, b in
+
+                list.sort(by: { (a: ListingCloud, b: ListingCloud) in
                     let da = a.endDate ?? .distantFuture
                     let db = b.endDate ?? .distantFuture
                     if da != db { return da < db }
                     return a.createdAt > b.createdAt
-                }
+                })
 
             case .ended:
+                // terminé si status != active OU endDate passée
                 list = list.filter { l in
                     if l.status != "active" { return true }
                     if let end = l.endDate { return end <= now }
                     return false
                 }
-                list.sort { $0.createdAt > $1.createdAt }
+
+                list.sort(by: { (a: ListingCloud, b: ListingCloud) in
+                    a.createdAt > b.createdAt
+                })
             }
 
         } else {
-            // ✅ Mes ventes: UNIQUEMENT basé sur status (logique pro)
+
+            // ✅ Mes ventes: basé sur les statuts “réels”
             switch salesFilter {
             case .active:
-                list = list.filter { $0.status == "active" || $0.status == "paused" }
+                list = list.filter { l in
+                    l.status == "active" || l.status == "paused"
+                }
 
                 // tri: encans fin bientôt, sinon récents
-                list.sort { a, b in
+                list.sort(by: { (a: ListingCloud, b: ListingCloud) in
                     if a.type != b.type { return a.type == "auction" }
                     if a.type == "auction" && b.type == "auction" {
                         let da = a.endDate ?? .distantFuture
@@ -240,15 +252,19 @@ struct MyDealsCloudView: View {
                         return a.createdAt > b.createdAt
                     }
                     return a.createdAt > b.createdAt
-                }
+                })
 
             case .sold:
                 list = list.filter { $0.status == "sold" }
-                list.sort { $0.createdAt > $1.createdAt }
+                list.sort(by: { (a: ListingCloud, b: ListingCloud) in
+                    a.createdAt > b.createdAt
+                })
 
             case .ended:
                 list = list.filter { $0.status == "ended" }
-                list.sort { $0.createdAt > $1.createdAt }
+                list.sort(by: { (a: ListingCloud, b: ListingCloud) in
+                    a.createdAt > b.createdAt
+                })
             }
         }
 
@@ -285,7 +301,7 @@ struct MyDealsCloudView: View {
     }
 }
 
-// MARK: - Row
+// MARK: - Row (compact list)
 
 private struct MyDealsRow: View {
 
@@ -317,38 +333,33 @@ private struct MyDealsRow: View {
     var body: some View {
         HStack(spacing: 12) {
 
-            ZStack(alignment: .topTrailing) {
-                MyDealsThumb(urlString: listing.imageUrl, size: CGSize(width: 78, height: 112))
-                    .zIndex(0)
-
-                VStack(alignment: .trailing, spacing: 6) {
-                    if listing.shouldShowGradingBadge, let label = listing.gradingLabel {
-                        GradingOverlayBadge(label: label, compact: true)
-                    }
-                    if isEndingSoon {
-                        EndingSoonBadge(compact: true)
-                    }
-                }
-                .padding(.top, 6)
-                .padding(.trailing, 6)
-                .zIndex(10)
-            }
+            MyDealsThumb(urlString: listing.imageUrl, size: CGSize(width: 78, height: 112))
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(listing.title)
                     .font(.headline)
                     .lineLimit(2)
 
-                ListingBadgeView(
-                    text: listing.typeBadge.text,
-                    systemImage: listing.typeBadge.icon,
-                    color: listing.typeBadge.color
-                )
+                // ✅ même ligne: Type + Se termine bientôt (si applicable)
+                HStack(spacing: 8) {
+                    ListingBadgeView(
+                        text: listing.typeBadge.text,
+                        systemImage: listing.typeBadge.icon,
+                        color: listing.typeBadge.color
+                    )
+
+                    if isEndingSoon {
+                        EndingSoonBadgeInline()
+                    }
+
+                    Spacer(minLength: 0)
+                }
 
                 Text(priceLine)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
 
-                if listing.type == "auction", let end = listing.endDate {
+                if listing.type == "auction", let end = listing.endDate, listing.status == "active" {
                     RemainingTimeText(endDate: end)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -364,7 +375,7 @@ private struct MyDealsRow: View {
 
             Spacer()
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, 8) // ✅ réduit hauteur
         .contentShape(Rectangle())
     }
 }
@@ -439,31 +450,28 @@ private struct RemainingTimeText: View {
     }
 }
 
-// MARK: - Ending Soon Badge (opaque)
+// MARK: - Ending Soon Badge inline (small)
 
-private struct EndingSoonBadge: View {
-    let compact: Bool
-
+private struct EndingSoonBadgeInline: View {
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
             Image(systemName: "clock.fill")
                 .font(.caption2)
-            Text("Se termine bientôt")
-                .font((compact ? Font.caption2 : Font.caption).weight(.semibold))
-                .lineLimit(1)
+            Text("Bientôt")
+                .font(.caption2.weight(.semibold))
         }
-        .padding(.horizontal, compact ? 8 : 10)
-        .padding(.vertical, compact ? 5 : 6)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
         .background(
             Capsule()
-                .fill(Color(.systemBackground).opacity(0.92))
+                .fill(Color.orange.opacity(0.12))
         )
         .overlay(
             Capsule()
-                .stroke(Color.orange.opacity(0.75), lineWidth: 1)
+                .stroke(Color.orange.opacity(0.40), lineWidth: 1)
         )
         .foregroundStyle(Color.orange)
-        .shadow(color: Color.black.opacity(0.10), radius: 2, x: 0, y: 1)
+        .lineLimit(1)
     }
 }
 

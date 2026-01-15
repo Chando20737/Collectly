@@ -5,7 +5,7 @@
 //  Created by Eric Chandonnet on 2026-01-14.
 //
 import SwiftUI
-import FirebaseAuth   // ✅ OBLIGATOIRE pour accéder à user.uid
+import FirebaseAuth   // ✅ requis pour accéder à user.uid
 
 struct MyListingsHubView: View {
 

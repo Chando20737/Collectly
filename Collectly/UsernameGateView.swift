@@ -8,11 +8,14 @@ import SwiftUI
 import FirebaseAuth
 
 struct UsernameGateView: View {
+    @EnvironmentObject private var session: SessionStore
+
     let onDone: () -> Void
 
     @State private var username: String = ""
     @State private var isWorking = false
     @State private var errorText: String?
+    @State private var isLoading = true
 
     private let usersService = UsersService()
 
@@ -32,33 +35,32 @@ struct UsernameGateView: View {
                 }
 
                 Section("Nom d’utilisateur") {
-                    TextField("ex: eric_123", text: $username)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.asciiCapable)
-                        .onChange(of: username) { _, newValue in
-                            // 1) enlève espaces
-                            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                            // 2) garde seulement [A-Za-z0-9_]
-                            let filtered = trimmed.filter { ch in
-                                ch.isLetter || ch.isNumber || ch == "_"
-                            }
-                            // 3) max 20 chars
-                            let capped = String(filtered.prefix(20))
-
-                            if capped != newValue {
-                                username = capped
-                            }
+                    if isLoading {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            Text("Vérification du profil…")
+                                .foregroundStyle(.secondary)
                         }
+                    } else {
+                        TextField("ex: eric_123", text: $username)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .keyboardType(.asciiCapable)
+                            .onChange(of: username) { _, newValue in
+                                let cleaned = UsersService.normalizeUsername(newValue)
+                                let capped = String(cleaned.prefix(20))
+                                if capped != newValue { username = capped }
+                            }
 
-                    HStack {
-                        Text("3–20 caractères. Lettres, chiffres et _")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Text("\(username.count)/20")
-                            .font(.footnote.monospacedDigit())
-                            .foregroundStyle(username.count >= 20 ? .orange : .secondary)
+                        HStack {
+                            Text("3–20 caractères. Lettres, chiffres et _")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text("\(username.count)/20")
+                                .font(.footnote.monospacedDigit())
+                                .foregroundStyle(username.count >= 20 ? .orange : .secondary)
+                        }
                     }
                 }
 
@@ -87,7 +89,8 @@ struct UsernameGateView: View {
 
                     Button("Se déconnecter", role: .destructive) {
                         do {
-                            try Auth.auth().signOut()
+                            try session.signOut()
+                            onDone()
                         } catch {
                             errorText = error.localizedDescription
                         }
@@ -96,24 +99,74 @@ struct UsernameGateView: View {
                 }
             }
             .navigationTitle("Profil")
+            .task {
+                await preloadAndMaybeSkip()
+            }
         }
     }
 
     private var canSubmit: Bool {
-        if isWorking { return false }
-        let u = username.trimmingCharacters(in: .whitespacesAndNewlines)
-        return isValidUsername(u)
+        if isWorking || isLoading { return false }
+        let u = UsersService.normalizeUsername(username)
+        return UsersService.isValidUsername(u)
+    }
+
+    @MainActor
+    private func preloadAndMaybeSkip() async {
+        errorText = nil
+        isLoading = true
+        defer { isLoading = false }
+
+        guard Auth.auth().currentUser != nil else { return }
+
+        do {
+            // ✅ si username existe déjà (Firestore usernameLower ou username), on sort direct
+            if let existing = try await usersService.getCurrentUsername(),
+               !existing.isEmpty {
+                onDone()
+                return
+            }
+
+            // fallback displayName
+            if let dn = Auth.auth().currentUser?.displayName,
+               !dn.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+
+                let normalized = UsersService.normalizeUsername(dn)
+                if UsersService.isValidUsername(normalized) {
+                    // backfill si possible
+                    try? await usersService.createProfileWithUsername(username: normalized)
+                    await session.refreshUser()
+                    onDone()
+                    return
+                }
+            }
+
+        } catch {
+            errorText = error.localizedDescription
+        }
     }
 
     private func submit() {
         errorText = nil
         isWorking = true
 
-        let clean = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        let clean = UsersService.normalizeUsername(username)
 
         Task {
             do {
+                // Race condition: si déjà défini, on sort
+                if let existing = try await usersService.getCurrentUsername(),
+                   !existing.isEmpty {
+                    await MainActor.run {
+                        isWorking = false
+                        onDone()
+                    }
+                    return
+                }
+
                 try await usersService.createProfileWithUsername(username: clean)
+                await session.refreshUser()
+
                 await MainActor.run {
                     isWorking = false
                     onDone()
@@ -126,12 +179,4 @@ struct UsernameGateView: View {
             }
         }
     }
-
-    private func isValidUsername(_ s: String) -> Bool {
-        guard s.count >= 3, s.count <= 20 else { return false }
-        return s.allSatisfy { ch in
-            ch.isLetter || ch.isNumber || ch == "_"
-        }
-    }
 }
-

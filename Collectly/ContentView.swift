@@ -16,13 +16,33 @@ struct ContentView: View {
     @Query(sort: \CardItem.createdAt, order: .reverse)
     private var cards: [CardItem]
 
+    // MARK: - Persisted UI state (UserDefaults)
+    @AppStorage("collection.searchText") private var storedSearchText: String = ""
+    @AppStorage("collection.viewMode") private var storedViewModeRaw: String = ViewMode.grid.rawValue
+    @AppStorage("collection.sort") private var storedSortRaw: String = SortOption.newest.rawValue
+    @AppStorage("collection.filter") private var storedFilterRaw: String = FilterOption.all.rawValue
+    @AppStorage("collection.groupBy") private var storedGroupByRaw: String = GroupByOption.none.rawValue
+    @AppStorage("collection.sectionSort") private var storedSectionSortRaw: String = SectionSortOption.valueHigh.rawValue
+
     @State private var searchText: String = ""
     @State private var viewMode: ViewMode = .grid
     @State private var sort: SortOption = .newest
     @State private var filter: FilterOption = .all
 
+    // ✅ Regroupement + tri des sections
+    @State private var groupBy: GroupByOption = .none
+    @State private var sectionSort: SectionSortOption = .valueHigh
+    @State private var expandedSectionKeys: Set<String> = []
+
     @State private var uiErrorText: String? = nil
     @State private var showAddSheet = false
+
+    // ✅ Quick edit
+    @State private var quickEditCard: CardItem? = nil
+
+    // ✅ Confirmation suppression
+    @State private var pendingDeleteItems: [CardItem] = []
+    @State private var showDeleteConfirm = false
 
     private let marketplace = MarketplaceService()
 
@@ -30,6 +50,40 @@ struct ContentView: View {
         case grid = "Grille"
         case list = "Liste"
         var id: String { rawValue }
+    }
+
+    enum GroupByOption: String, CaseIterable, Identifiable {
+        case none = "Aucun"
+        case year = "Année"
+        case set = "Set"
+        case player = "Joueur"
+
+        var id: String { rawValue }
+
+        var systemImage: String {
+            switch self {
+            case .none: return "rectangle.grid.1x2"
+            case .year: return "calendar"
+            case .set: return "square.stack.3d.up"
+            case .player: return "person"
+            }
+        }
+    }
+
+    enum SectionSortOption: String, CaseIterable, Identifiable {
+        case valueHigh = "Valeur ↓"
+        case alphaAZ = "A → Z"
+        case alphaZA = "Z → A"
+
+        var id: String { rawValue }
+
+        var systemImage: String {
+            switch self {
+            case .valueHigh: return "dollarsign.circle"
+            case .alphaAZ: return "text.line.first.and.arrowtriangle.forward"
+            case .alphaZA: return "text.line.last.and.arrowtriangle.forward"
+            }
+        }
     }
 
     enum SortOption: String, CaseIterable, Identifiable {
@@ -88,8 +142,6 @@ struct ContentView: View {
                 .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-
-                    // ✅ + visible mais désactivé
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { showAddSheet = true } label: {
                             Image(systemName: "plus")
@@ -103,6 +155,16 @@ struct ContentView: View {
 
                 // ✅ Connecté
                 let items = filteredSortedAndFilteredCards
+                let totalValue = totalEstimatedValue(of: items)
+
+                // ✅ Si regroupé: sections calculées une fois (header + UI)
+                let groupedSections: [CollectionSection] = {
+                    if groupBy == .none { return [] }
+                    return buildSections(from: items, groupBy: groupBy, sectionSort: sectionSort)
+                }()
+
+                let sectionCount = groupedSections.count
+                let allExpanded = groupedAllExpanded(keys: Set(groupedSections.map { $0.key }))
 
                 Group {
                     if items.isEmpty {
@@ -116,8 +178,25 @@ struct ContentView: View {
 
                             CollectionMiniHeader(
                                 count: items.count,
+                                totalValueCAD: totalValue,
                                 hasActiveFilter: filter != .all,
-                                sortLabel: sort.rawValue
+                                hasActiveSearch: !searchText.trimmedLocal.isEmpty,
+                                sortLabel: sort.rawValue,
+                                groupLabel: groupBy.rawValue,
+                                isGrouped: groupBy != .none,
+                                sectionSortLabel: sectionSort.rawValue,
+                                sectionCount: sectionCount,
+                                groupAllExpanded: allExpanded,
+                                onToggleAll: {
+                                    toggleAllSections(keys: Set(groupedSections.map { $0.key }))
+                                },
+                                onReset: {
+                                    filter = .all
+                                    sort = .newest
+                                    searchText = ""
+                                    groupBy = .none
+                                    sectionSort = .valueHigh
+                                }
                             )
                             .padding(.horizontal, 12)
                             .padding(.top, 8)
@@ -132,10 +211,18 @@ struct ContentView: View {
                             .padding(.horizontal, 12)
                             .padding(.bottom, 8)
 
-                            if viewMode == .grid {
-                                collectionGrid(items)
+                            if groupBy == .none {
+                                if viewMode == .grid {
+                                    collectionGrid(items)
+                                } else {
+                                    collectionList(items)
+                                }
                             } else {
-                                collectionList(items)
+                                if viewMode == .grid {
+                                    groupedGrid(groupedSections)
+                                } else {
+                                    groupedList(groupedSections)
+                                }
                             }
                         }
                     }
@@ -171,7 +258,7 @@ struct ContentView: View {
                         .accessibilityLabel("Filtrer")
                     }
 
-                    // ✅ Trier
+                    // ✅ Trier items (cartes)
                     ToolbarItem(placement: .topBarLeading) {
                         Menu {
                             Picker("Trier", selection: $sort) {
@@ -186,6 +273,41 @@ struct ContentView: View {
                         .accessibilityLabel("Trier")
                     }
 
+                    // ✅ Regrouper + Tri sections
+                    ToolbarItem(placement: .topBarLeading) {
+                        Menu {
+                            Picker("Regrouper par", selection: $groupBy) {
+                                ForEach(GroupByOption.allCases) { opt in
+                                    Label(opt.rawValue, systemImage: opt.systemImage)
+                                        .tag(opt)
+                                }
+                            }
+
+                            if groupBy != .none {
+                                Divider()
+
+                                Picker("Trier les sections", selection: $sectionSort) {
+                                    ForEach(SectionSortOption.allCases) { opt in
+                                        Label(opt.rawValue, systemImage: opt.systemImage)
+                                            .tag(opt)
+                                    }
+                                }
+                            }
+
+                            if groupBy != .none {
+                                Divider()
+                                Button {
+                                    groupBy = .none
+                                } label: {
+                                    Label("Désactiver le regroupement", systemImage: "xmark.circle")
+                                }
+                            }
+                        } label: {
+                            Image(systemName: groupBy == .none ? "square.grid.2x2" : "square.grid.2x2.fill")
+                        }
+                        .accessibilityLabel("Regrouper")
+                    }
+
                     // ✅ Ajouter
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { showAddSheet = true } label: {
@@ -194,8 +316,32 @@ struct ContentView: View {
                         .accessibilityLabel("Ajouter une carte")
                     }
                 }
+                .onChange(of: groupBy) { _, _ in
+                    persistUIState()
+                    rebuildExpandedKeys()
+                }
+                .onChange(of: sectionSort) { _, _ in
+                    persistUIState()
+                }
+                .onChange(of: searchText) { _, _ in
+                    persistUIState()
+                    if groupBy != .none { rebuildExpandedKeys() }
+                }
+                .onChange(of: viewMode) { _, _ in
+                    persistUIState()
+                }
+                .onChange(of: sort) { _, _ in
+                    persistUIState()
+                }
+                .onChange(of: filter) { _, _ in
+                    persistUIState()
+                }
                 .sheet(isPresented: $showAddSheet) {
                     AddCardView()
+                }
+                // ✅ Quick Edit sheet
+                .sheet(item: $quickEditCard) { card in
+                    CardQuickEditView(card: card)
                 }
                 .alert("Erreur", isPresented: Binding(
                     get: { uiErrorText != nil },
@@ -205,11 +351,51 @@ struct ContentView: View {
                 } message: {
                     Text(uiErrorText ?? "")
                 }
+                .alert("Supprimer", isPresented: $showDeleteConfirm) {
+                    Button("Annuler", role: .cancel) { pendingDeleteItems = [] }
+                    Button("Supprimer", role: .destructive) {
+                        let toDelete = pendingDeleteItems
+                        pendingDeleteItems = []
+                        deleteItemsNow(toDelete)
+                    }
+                } message: {
+                    let count = pendingDeleteItems.count
+                    Text(count <= 1
+                         ? "Supprimer cette carte? Cette action est irréversible."
+                         : "Supprimer ces \(count) cartes? Cette action est irréversible.")
+                }
+            }
+        }
+        .onAppear {
+            restoreUIState()
+            if groupBy != .none {
+                rebuildExpandedKeys()
             }
         }
     }
 
-    // MARK: - Grid
+    // MARK: - Persist / Restore
+
+    private func persistUIState() {
+        storedSearchText = searchText
+        storedViewModeRaw = viewMode.rawValue
+        storedSortRaw = sort.rawValue
+        storedFilterRaw = filter.rawValue
+        storedGroupByRaw = groupBy.rawValue
+        storedSectionSortRaw = sectionSort.rawValue
+    }
+
+    private func restoreUIState() {
+        searchText = storedSearchText
+
+        if let m = ViewMode(rawValue: storedViewModeRaw) { viewMode = m } else { viewMode = .grid }
+        if let s = SortOption(rawValue: storedSortRaw) { sort = s } else { sort = .newest }
+        if let f = FilterOption(rawValue: storedFilterRaw) { filter = f } else { filter = .all }
+        if let g = GroupByOption(rawValue: storedGroupByRaw) { groupBy = g } else { groupBy = .none }
+        if let ss = SectionSortOption(rawValue: storedSectionSortRaw) { sectionSort = ss } else { sectionSort = .valueHigh }
+    }
+
+    // MARK: - Grid (normal)
 
     @ViewBuilder
     private func collectionGrid(_ items: [CardItem]) -> some View {
@@ -228,6 +414,22 @@ struct ContentView: View {
                         CollectionGridCard(card: card)
                     }
                     .buttonStyle(GridPressableLinkStyle())
+                    .contextMenu {
+                        Button {
+                            quickEditCard = card
+                        } label: {
+                            Label("Modifier", systemImage: "pencil")
+                        }
+
+                        Divider()
+
+                        Button(role: .destructive) {
+                            pendingDeleteItems = [card]
+                            showDeleteConfirm = true
+                        } label: {
+                            Label("Supprimer", systemImage: "trash")
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 10)
@@ -235,7 +437,7 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - List
+    // MARK: - List (normal)
 
     @ViewBuilder
     private func collectionList(_ items: [CardItem]) -> some View {
@@ -248,12 +450,305 @@ struct ContentView: View {
                 }
                 .buttonStyle(ListPressableLinkStyle())
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                    Button {
+                        quickEditCard = card
+                    } label: {
+                        Label("Modifier", systemImage: "pencil")
+                    }
+                    .tint(.blue)
+                }
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive) {
+                        pendingDeleteItems = [card]
+                        showDeleteConfirm = true
+                    } label: {
+                        Label("Supprimer", systemImage: "trash")
+                    }
+                }
             }
             .onDelete { offsets in
-                deleteCards(offsets, in: items)
+                let toDelete = offsets.compactMap { idx in
+                    items.indices.contains(idx) ? items[idx] : nil
+                }
+                guard !toDelete.isEmpty else { return }
+                pendingDeleteItems = toDelete
+                showDeleteConfirm = true
             }
         }
         .listStyle(.plain)
+    }
+
+    // MARK: - Grouped Grid
+
+    @ViewBuilder
+    private func groupedGrid(_ sections: [CollectionSection]) -> some View {
+        ScrollView {
+            LazyVStack(spacing: 12) {
+                ForEach(sections) { section in
+                    SectionCard(
+                        title: section.key,
+                        count: section.items.count,
+                        valueCAD: section.totalValueCAD,
+                        isExpanded: bindingForSection(section.key)
+                    ) {
+                        LazyVGrid(
+                            columns: [
+                                GridItem(.flexible(), spacing: 10, alignment: .top),
+                                GridItem(.flexible(), spacing: 10, alignment: .top)
+                            ],
+                            spacing: 10
+                        ) {
+                            ForEach(section.items) { card in
+                                NavigationLink {
+                                    CardDetailView(card: card)
+                                } label: {
+                                    CollectionGridCard(card: card)
+                                }
+                                .buttonStyle(GridPressableLinkStyle())
+                                .contextMenu {
+                                    Button {
+                                        quickEditCard = card
+                                    } label: {
+                                        Label("Modifier", systemImage: "pencil")
+                                    }
+
+                                    Divider()
+
+                                    Button(role: .destructive) {
+                                        pendingDeleteItems = [card]
+                                        showDeleteConfirm = true
+                                    } label: {
+                                        Label("Supprimer", systemImage: "trash")
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 8)
+                    }
+                    .padding(.horizontal, 10)
+                }
+            }
+            .padding(.bottom, 14)
+        }
+    }
+
+    // MARK: - Grouped List
+
+    @ViewBuilder
+    private func groupedList(_ sections: [CollectionSection]) -> some View {
+        List {
+            ForEach(sections) { section in
+                Section {
+                    if expandedSectionKeys.contains(section.key) {
+                        ForEach(section.items) { card in
+                            NavigationLink {
+                                CardDetailView(card: card)
+                            } label: {
+                                CollectionListRow(card: card)
+                            }
+                            .buttonStyle(ListPressableLinkStyle())
+                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                Button {
+                                    quickEditCard = card
+                                } label: {
+                                    Label("Modifier", systemImage: "pencil")
+                                }
+                                .tint(.blue)
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) {
+                                    pendingDeleteItems = [card]
+                                    showDeleteConfirm = true
+                                } label: {
+                                    Label("Supprimer", systemImage: "trash")
+                                }
+                            }
+                            .contextMenu {
+                                Button {
+                                    quickEditCard = card
+                                } label: {
+                                    Label("Modifier", systemImage: "pencil")
+                                }
+
+                                Divider()
+
+                                Button(role: .destructive) {
+                                    pendingDeleteItems = [card]
+                                    showDeleteConfirm = true
+                                } label: {
+                                    Label("Supprimer", systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Button {
+                        toggleSection(section.key)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: expandedSectionKeys.contains(section.key) ? "chevron.down" : "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 16)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(section.key)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+
+                                if section.totalValueCAD > 0 {
+                                    Text("≈ \(Money.moneyCAD(section.totalValueCAD))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+
+                            Spacer()
+
+                            Text("\(section.items.count)")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(
+                                    Capsule(style: .continuous).fill(Color(.secondarySystemGroupedBackground))
+                                )
+                        }
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .listStyle(.plain)
+    }
+
+    // MARK: - Sections builder
+
+    private struct CollectionSection: Identifiable {
+        let id: String
+        let key: String
+        let items: [CardItem]
+        let totalValueCAD: Double
+    }
+
+    private func buildSections(
+        from items: [CardItem],
+        groupBy: GroupByOption,
+        sectionSort: SectionSortOption
+    ) -> [CollectionSection] {
+
+        let dict: [String: [CardItem]] = Dictionary(grouping: items) { card in
+            switch groupBy {
+            case .none:
+                return "Toutes"
+            case .year:
+                let v = (card.cardYear ?? "").trimmedLocal
+                return v.isEmpty ? "Sans année" : v
+            case .set:
+                let v = (card.setName ?? "").trimmedLocal
+                return v.isEmpty ? "Sans set" : v
+            case .player:
+                let v = (card.playerName ?? "").trimmedLocal
+                return v.isEmpty ? "Sans joueur" : v
+            }
+        }
+
+        var sections: [CollectionSection] = dict.map { (k, list) in
+            CollectionSection(
+                id: k,
+                key: k,
+                items: list,
+                totalValueCAD: totalEstimatedValue(of: list)
+            )
+        }
+
+        sections.sort { a, b in
+            let aSans = a.key.lowercased().hasPrefix("sans ")
+            let bSans = b.key.lowercased().hasPrefix("sans ")
+            if aSans != bSans { return bSans }
+
+            switch sectionSort {
+            case .valueHigh:
+                if a.totalValueCAD != b.totalValueCAD {
+                    return a.totalValueCAD > b.totalValueCAD
+                }
+                return sortSectionKey(a.key, b.key, groupBy: groupBy)
+
+            case .alphaAZ:
+                return a.key.localizedCaseInsensitiveCompare(b.key) == .orderedAscending
+            case .alphaZA:
+                return a.key.localizedCaseInsensitiveCompare(b.key) == .orderedDescending
+            }
+        }
+
+        return sections
+    }
+
+    private func sortSectionKey(_ a: String, _ b: String, groupBy: GroupByOption) -> Bool {
+        let aSans = a.lowercased().hasPrefix("sans ")
+        let bSans = b.lowercased().hasPrefix("sans ")
+        if aSans != bSans { return bSans }
+
+        switch groupBy {
+        case .year:
+            let ai = Int(a) ?? Int(a.filter(\.isNumber)) ?? -1
+            let bi = Int(b) ?? Int(b.filter(\.isNumber)) ?? -1
+            if ai != -1 || bi != -1 { return ai > bi }
+            return a.localizedCaseInsensitiveCompare(b) == .orderedAscending
+        case .set, .player, .none:
+            return a.localizedCaseInsensitiveCompare(b) == .orderedAscending
+        }
+    }
+
+    // MARK: - Expand / collapse
+
+    private func rebuildExpandedKeys() {
+        guard groupBy != .none else {
+            expandedSectionKeys = []
+            return
+        }
+        let items = filteredSortedAndFilteredCards
+        let sections = buildSections(from: items, groupBy: groupBy, sectionSort: sectionSort)
+        expandedSectionKeys = Set(sections.map { $0.key })
+    }
+
+    private func toggleSection(_ key: String) {
+        if expandedSectionKeys.contains(key) {
+            expandedSectionKeys.remove(key)
+        } else {
+            expandedSectionKeys.insert(key)
+        }
+    }
+
+    private func bindingForSection(_ key: String) -> Binding<Bool> {
+        Binding(
+            get: { expandedSectionKeys.contains(key) },
+            set: { newValue in
+                if newValue { expandedSectionKeys.insert(key) }
+                else { expandedSectionKeys.remove(key) }
+            }
+        )
+    }
+
+    private func groupedAllExpanded(keys: Set<String>) -> Bool {
+        guard !keys.isEmpty else { return false }
+        return keys.isSubset(of: expandedSectionKeys)
+    }
+
+    private func toggleAllSections(keys: Set<String>) {
+        guard !keys.isEmpty else { return }
+        if keys.isSubset(of: expandedSectionKeys) {
+            expandedSectionKeys.subtract(keys)
+        } else {
+            expandedSectionKeys.formUnion(keys)
+        }
     }
 
     // MARK: - Empty message
@@ -322,18 +817,15 @@ struct ContentView: View {
             return a.createdAt > b.createdAt
         case .oldest:
             return a.createdAt < b.createdAt
-
         case .titleAZ:
             return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
         case .titleZA:
             return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedDescending
-
         case .valueHigh:
             let av = a.estimatedPriceCAD ?? 0
             let bv = b.estimatedPriceCAD ?? 0
             if av != bv { return av > bv }
             return a.createdAt > b.createdAt
-
         case .valueLow:
             let av = a.estimatedPriceCAD ?? 0
             let bv = b.estimatedPriceCAD ?? 0
@@ -342,22 +834,26 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Total value
+
+    private func totalEstimatedValue(of items: [CardItem]) -> Double {
+        items.reduce(0) { partial, card in
+            partial + max(0, card.estimatedPriceCAD ?? 0)
+        }
+    }
+
     // MARK: - Delete (sync Marketplace)
 
-    private func deleteCards(_ offsets: IndexSet, in currentList: [CardItem]) {
-        let toDelete = offsets.compactMap { idx in
-            currentList.indices.contains(idx) ? currentList[idx] : nil
-        }
-
+    private func deleteItemsNow(_ items: [CardItem]) {
         Task {
-            for card in toDelete {
+            for card in items {
                 await marketplace.endListingIfExistsForDeletedCard(
                     cardItemId: card.id.uuidString
                 )
             }
 
             await MainActor.run {
-                for card in toDelete {
+                for card in items {
                     modelContext.delete(card)
                 }
                 do {
@@ -374,8 +870,19 @@ struct ContentView: View {
 
 private struct CollectionMiniHeader: View {
     let count: Int
+    let totalValueCAD: Double
     let hasActiveFilter: Bool
+    let hasActiveSearch: Bool
     let sortLabel: String
+    let groupLabel: String
+    let isGrouped: Bool
+    let sectionSortLabel: String
+
+    let sectionCount: Int
+    let groupAllExpanded: Bool
+    let onToggleAll: () -> Void
+
+    let onReset: () -> Void
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
@@ -384,9 +891,17 @@ private struct CollectionMiniHeader: View {
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(.secondary)
 
-                Text("\(count) carte\(count > 1 ? "s" : "")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 10) {
+                    Text("\(count) carte\(count > 1 ? "s" : "")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if totalValueCAD > 0 {
+                        Text("≈ \(Money.moneyCAD(totalValueCAD))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
 
             Spacer()
@@ -394,8 +909,34 @@ private struct CollectionMiniHeader: View {
             HStack(spacing: 8) {
                 Chip(text: sortLabel, systemImage: "arrow.up.arrow.down")
 
+                if isGrouped {
+                    Chip(text: "Par \(groupLabel.lowercased())", systemImage: "square.grid.2x2.fill")
+                    Chip(text: sectionSortLabel, systemImage: "list.bullet")
+
+                    if sectionCount > 0 {
+                        ToggleAllChip(
+                            isExpanded: groupAllExpanded,
+                            sectionCount: sectionCount,
+                            onTap: onToggleAll
+                        )
+                    }
+                }
+
                 if hasActiveFilter {
                     Chip(text: "Filtré", systemImage: "line.3.horizontal.decrease.circle.fill")
+                }
+
+                if hasActiveSearch {
+                    Chip(text: "Recherche", systemImage: "magnifyingglass")
+                }
+
+                if hasActiveFilter || hasActiveSearch || isGrouped || sortLabel != ContentView.SortOption.newest.rawValue {
+                    Button { onReset() } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Réinitialiser")
                 }
             }
         }
@@ -419,6 +960,120 @@ private struct CollectionMiniHeader: View {
                     .fill(Color(.secondarySystemGroupedBackground))
             )
         }
+    }
+
+    private struct ToggleAllChip: View {
+        let isExpanded: Bool
+        let sectionCount: Int
+        let onTap: () -> Void
+
+        var body: some View {
+            Button {
+                onTap()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: isExpanded ? "rectangle.compress.vertical" : "rectangle.expand.vertical")
+                    Text(isExpanded ? "Tout fermer (\(sectionCount))" : "Tout ouvrir (\(sectionCount))")
+                        .lineLimit(1)
+                }
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(Color(.secondarySystemGroupedBackground))
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isExpanded ? "Tout fermer" : "Tout ouvrir")
+        }
+    }
+}
+
+// MARK: - Section card (Grid grouped)
+
+private struct SectionCard<Content: View>: View {
+    let title: String
+    let count: Int
+    let valueCAD: Double
+    @Binding var isExpanded: Bool
+    @ViewBuilder let content: Content
+
+    init(
+        title: String,
+        count: Int,
+        valueCAD: Double,
+        isExpanded: Binding<Bool>,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.count = count
+        self.valueCAD = valueCAD
+        self._isExpanded = isExpanded
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+
+            Button {
+                isExpanded.toggle()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+
+                        if valueCAD > 0 {
+                            Text("≈ \(Money.moneyCAD(valueCAD))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+
+                    Spacer()
+
+                    Text("\(count)")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(Color(.secondarySystemGroupedBackground))
+                        )
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                Divider()
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 8)
+
+                content
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(.systemGroupedBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+        )
     }
 }
 
@@ -451,8 +1106,8 @@ private struct CollectionGridCard: View {
                     .lineLimit(2)
             }
 
-            if let price = card.estimatedPriceCAD {
-                Text("≈ \(Self.moneyCAD(price))")
+            if let price = card.estimatedPriceCAD, price > 0 {
+                Text("≈ \(Money.moneyCAD(price))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -464,10 +1119,6 @@ private struct CollectionGridCard: View {
                 .fill(Color(.secondarySystemGroupedBackground))
         )
         .contentShape(Rectangle())
-    }
-
-    private static func moneyCAD(_ value: Double) -> String {
-        String(format: "%.2f $ CAD", value)
     }
 }
 
@@ -501,8 +1152,8 @@ private struct CollectionListRow: View {
                         .lineLimit(1)
                 }
 
-                if let price = card.estimatedPriceCAD {
-                    Text("≈ \(Self.moneyCAD(price))")
+                if let price = card.estimatedPriceCAD, price > 0 {
+                    Text("≈ \(Money.moneyCAD(price))")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -512,10 +1163,6 @@ private struct CollectionListRow: View {
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
-    }
-
-    private static func moneyCAD(_ value: Double) -> String {
-        String(format: "%.2f $ CAD", value)
     }
 }
 
@@ -577,6 +1224,19 @@ private struct ListPressableLinkStyle: ButtonStyle {
     }
 }
 
+// MARK: - Money formatter
+
+private enum Money {
+    static func moneyCAD(_ value: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = "CAD"
+        formatter.maximumFractionDigits = 2
+        formatter.minimumFractionDigits = 2
+        return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.2f $ CAD", value)
+    }
+}
+
 // MARK: - Helpers
 
 private extension String {
@@ -585,11 +1245,3 @@ private extension String {
     }
 }
 
-private extension CardItem {
-    var gradingLabel: String? {
-        let g = (gradeValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let c = (gradingCompany ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !g.isEmpty else { return nil }
-        return c.isEmpty ? g : "\(c) \(g)"
-    }
-}

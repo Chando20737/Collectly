@@ -13,6 +13,8 @@ enum UsersServiceError: LocalizedError {
     case invalidUsername
     case usernameTaken
     case usernameImmutable
+    case permissionDenied
+    case firestore(String)
 
     var errorDescription: String? {
         switch self {
@@ -24,6 +26,10 @@ enum UsersServiceError: LocalizedError {
             return "Ce nom d’utilisateur est déjà pris."
         case .usernameImmutable:
             return "Ton username est déjà défini et ne peut pas être modifié."
+        case .permissionDenied:
+            return "Permissions insuffisantes (Firestore). Vérifie les Rules pour /users et /usernames."
+        case .firestore(let msg):
+            return msg
         }
     }
 }
@@ -34,88 +40,131 @@ final class UsersService {
 
     // MARK: - Public API
 
-    func currentUserHasUsername() async throws -> Bool {
+    /// ✅ Retourne le username actuel si présent.
+    /// - Priorité: usernameLower
+    /// - Fallback: username (et backfill usernameLower automatiquement si manquant)
+    func getCurrentUsername() async throws -> String? {
         guard let uid = Auth.auth().currentUser?.uid else {
             throw UsersServiceError.notSignedIn
         }
 
         let doc = try await db.collection("users").document(uid).getDocument()
         let data = doc.data() ?? [:]
+
+        let uLower = (data["usernameLower"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !uLower.isEmpty {
+            return Self.normalizeUsername(uLower)
+        }
+
         let u = (data["username"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return !u.isEmpty
+        if !u.isEmpty {
+            let normalized = Self.normalizeUsername(u)
+
+            // ✅ Backfill usernameLower si absent (utile pour tes anciens users)
+            try? await db.collection("users").document(uid).setData([
+                "usernameLower": normalized,
+                "updatedAt": Timestamp(date: Date())
+            ], merge: true)
+
+            return normalized
+        }
+
+        return nil
+    }
+
+    func currentUserHasUsername() async throws -> Bool {
+        let u = try await getCurrentUsername()
+        return (u ?? "").isEmpty == false
     }
 
     func createProfileWithUsername(username: String) async throws {
-        guard let uid = Auth.auth().currentUser?.uid else {
+        guard let user = Auth.auth().currentUser else {
             throw UsersServiceError.notSignedIn
         }
-        try await setUsername(uid: uid, username: username)
+
+        let normalized = Self.normalizeUsername(username)
+        guard Self.isValidUsername(normalized) else { throw UsersServiceError.invalidUsername }
+
+        try await setUsername(uid: user.uid, username: normalized)
+        try await setAuthDisplayName(normalized)
     }
 
     func getUsername(uid: String) async throws -> String? {
         let doc = try await db.collection("users").document(uid).getDocument()
         let data = doc.data() ?? [:]
-        return data["username"] as? String
+        return (data["usernameLower"] as? String) ?? (data["username"] as? String)
     }
 
     // MARK: - Core (username immuable)
 
     func setUsername(uid: String, username: String) async throws {
-        let cleaned = Self.cleanUsername(username)
-        guard Self.isValidUsername(cleaned) else { throw UsersServiceError.invalidUsername }
 
-        let lower = cleaned.lowercased()
+        let normalized = Self.normalizeUsername(username)
+        guard Self.isValidUsername(normalized) else { throw UsersServiceError.invalidUsername }
 
         let usersRef = db.collection("users").document(uid)
-        let usernamesRef = db.collection("usernames").document(lower)
+        let usernamesRef = db.collection("usernames").document(normalized)
 
-        try await runTransactionAsync { transaction, errorPointer in
-            do {
-                // 1) Username déjà défini? -> immuable
-                let userSnap = try transaction.getDocument(usersRef)
-                if userSnap.exists {
-                    let existing = (userSnap.data()?["username"] as? String) ?? ""
-                    if !existing.isEmpty {
+        do {
+            try await runTransactionAsync { transaction, errorPointer in
+                do {
+                    // 1) Username déjà défini? (immuable)
+                    let userSnap = try transaction.getDocument(usersRef)
+                    if userSnap.exists {
+                        let data = userSnap.data() ?? [:]
+                        let existing = ((data["usernameLower"] as? String) ?? (data["username"] as? String) ?? "")
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                        if !existing.isEmpty {
+                            errorPointer?.pointee = NSError(
+                                domain: "UsersService",
+                                code: 403,
+                                userInfo: [NSLocalizedDescriptionKey: UsersServiceError.usernameImmutable.localizedDescription]
+                            )
+                            return nil
+                        }
+                    }
+
+                    // 2) Username pris?
+                    let usernameSnap = try transaction.getDocument(usernamesRef)
+                    if usernameSnap.exists {
                         errorPointer?.pointee = NSError(
                             domain: "UsersService",
-                            code: 403,
-                            userInfo: [NSLocalizedDescriptionKey: UsersServiceError.usernameImmutable.localizedDescription]
+                            code: 409,
+                            userInfo: [NSLocalizedDescriptionKey: UsersServiceError.usernameTaken.localizedDescription]
                         )
                         return nil
                     }
-                }
 
-                // 2) Username pris?
-                let usernameSnap = try transaction.getDocument(usernamesRef)
-                if usernameSnap.exists {
-                    errorPointer?.pointee = NSError(
-                        domain: "UsersService",
-                        code: 409,
-                        userInfo: [NSLocalizedDescriptionKey: UsersServiceError.usernameTaken.localizedDescription]
-                    )
+                    let now = Timestamp(date: Date())
+
+                    // 3) users/{uid}
+                    transaction.setData([
+                        "uid": uid,
+                        "username": normalized,
+                        "usernameLower": normalized,
+                        "updatedAt": now,
+                        "createdAt": now
+                    ], forDocument: usersRef, merge: true)
+
+                    // 4) usernames/{normalized}
+                    transaction.setData([
+                        "uid": uid,
+                        "createdAt": now
+                    ], forDocument: usernamesRef, merge: false)
+
+                    return true
+                } catch {
+                    errorPointer?.pointee = error as NSError
                     return nil
                 }
-
-                // 3) Écrit users/{uid}
-                let now = Timestamp(date: Date())
-                transaction.setData([
-                    "uid": uid,
-                    "username": cleaned,
-                    "usernameLower": lower,
-                    "createdAt": now
-                ], forDocument: usersRef, merge: true)
-
-                // 4) Réserve usernames/{lower}
-                transaction.setData([
-                    "uid": uid,
-                    "createdAt": now
-                ], forDocument: usernamesRef, merge: false)
-
-                return true
-            } catch {
-                errorPointer?.pointee = error as NSError
-                return nil
             }
+        } catch {
+            let ns = error as NSError
+            if ns.domain.contains("FIRFirestoreErrorDomain"), ns.code == 7 {
+                throw UsersServiceError.permissionDenied
+            }
+            throw error
         }
     }
 
@@ -147,18 +196,33 @@ final class UsersService {
         }
     }
 
-    // MARK: - Helpers
+    // MARK: - Auth displayName
 
-    private static func cleanUsername(_ s: String) -> String {
-        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.filter { !$0.isWhitespace }
+    @MainActor
+    private func setAuthDisplayName(_ usernameLower: String) async throws {
+        guard let user = Auth.auth().currentUser else { throw UsersServiceError.notSignedIn }
+
+        let change = user.createProfileChangeRequest()
+        change.displayName = usernameLower
+        try await change.commitChanges()
+
+        // reload pour reflet immédiat
+        try? await user.reload()
     }
 
-    private static func isValidUsername(_ s: String) -> Bool {
+    // MARK: - Helpers (utilisés par tes Views)
+
+    static func normalizeUsername(_ s: String) -> String {
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return trimmed.filter { ch in
+            ch.isLetter || ch.isNumber || ch == "_"
+        }
+    }
+
+    static func isValidUsername(_ s: String) -> Bool {
         guard s.count >= 3, s.count <= 20 else { return false }
         return s.allSatisfy { ch in
             ch.isLetter || ch.isNumber || ch == "_"
         }
     }
 }
-

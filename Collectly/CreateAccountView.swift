@@ -10,6 +10,7 @@ import FirebaseFirestore
 
 struct CreateAccountView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var session: SessionStore
 
     @State private var email: String = ""
     @State private var password: String = ""
@@ -18,7 +19,6 @@ struct CreateAccountView: View {
     @State private var isWorking = false
     @State private var errorText: String?
 
-    // Ajuste si tu veux
     private let minPasswordLength = 6
     private let minUsernameLength = 3
     private let maxUsernameLength = 20
@@ -39,7 +39,6 @@ struct CreateAccountView: View {
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .onChange(of: username) { _, newValue in
-                                // Nettoyage “live”
                                 let cleaned = sanitizeUsername(newValue)
                                 if cleaned != newValue { username = cleaned }
                                 if username.count > maxUsernameLength {
@@ -47,7 +46,7 @@ struct CreateAccountView: View {
                                 }
                             }
 
-                        Text("3–20 caractères. Lettres, chiffres, . et _.")
+                        Text("3–20 caractères. Lettres, chiffres et _.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -86,17 +85,14 @@ struct CreateAccountView: View {
     }
 
     private func sanitizeUsername(_ input: String) -> String {
-        // lowercased + enlève espaces + garde caractères autorisés
         let lowered = input.lowercased()
-        let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789._")
+        let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789_")
         return String(lowered.filter { allowed.contains($0) })
     }
 
     private func isUsernameValid(_ u: String) -> Bool {
-        guard u.count >= minUsernameLength && u.count <= maxUsernameLength else { return false }
-        // interdit de commencer/finir par .
-        if u.hasPrefix(".") || u.hasSuffix(".") { return false }
-        return true
+        let v = u.trimmingCharacters(in: .whitespacesAndNewlines)
+        return v.count >= minUsernameLength && v.count <= maxUsernameLength
     }
 
     // MARK: - Create Account
@@ -108,38 +104,69 @@ struct CreateAccountView: View {
         defer { isWorking = false }
 
         let cleanEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        let cleanUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedUsername = sanitizeUsername(username.trimmingCharacters(in: .whitespacesAndNewlines))
+
+        guard isUsernameValid(normalizedUsername) else {
+            errorText = "Username invalide. Utilise 3–20 caractères: lettres, chiffres et _."
+            return
+        }
 
         do {
-            // 1) Firebase Auth: create user
+            // 1) Firebase Auth
             let result = try await Auth.auth().createUser(withEmail: cleanEmail, password: password)
-
-            // 2) Set displayName (username)
-            let change = result.user.createProfileChangeRequest()
-            change.displayName = cleanUsername
-            try await change.commitChanges()
-
-            // 3) Store in Firestore users/{uid}
             let uid = result.user.uid
             let db = Firestore.firestore()
-            try await db.collection("users").document(uid).setData([
+
+            // 2) Vérifier si username déjà pris
+            let usernameRef = db.collection("usernames").document(normalizedUsername)
+            let snap = try await usernameRef.getDocument()
+            if snap.exists {
+                try? await result.user.delete()
+                errorText = "Ce username est déjà pris. Essaie-en un autre."
+                return
+            }
+
+            // 3) Batch write /usernames + /users (même écriture)
+            let userRef = db.collection("users").document(uid)
+            let now = Timestamp(date: Date())
+
+            let batch = db.batch()
+            batch.setData([
+                "uid": uid,
+                "createdAt": now
+            ], forDocument: usernameRef)
+
+            batch.setData([
                 "uid": uid,
                 "email": cleanEmail,
-                "username": cleanUsername,
-                "createdAt": Timestamp(date: Date()),
-                "updatedAt": Timestamp(date: Date())
-            ], merge: true)
+                "username": normalizedUsername,
+                "createdAt": now,
+                "updatedAt": now
+            ], forDocument: userRef, merge: true)
 
-            // ✅ Done
+            try await batch.commit()
+
+            // 4) displayName
+            let change = result.user.createProfileChangeRequest()
+            change.displayName = normalizedUsername
+            try await change.commitChanges()
+
+            // ✅ IMPORTANT: forcer SessionStore à republier le user (displayName)
+            await session.refreshUser()
+
             dismiss()
+
         } catch {
+            if let user = Auth.auth().currentUser {
+                try? await user.delete()
+            }
             errorText = humanError(error)
         }
     }
 
     private func humanError(_ error: Error) -> String {
         let ns = error as NSError
-        // Messages un peu plus “humains”
+
         if ns.domain == AuthErrorDomain {
             switch ns.code {
             case AuthErrorCode.emailAlreadyInUse.rawValue:
@@ -152,6 +179,14 @@ struct CreateAccountView: View {
                 return error.localizedDescription
             }
         }
+
+        if ns.domain.contains("FIRFirestoreErrorDomain") || ns.domain.contains("FirebaseFirestore") {
+            if ns.code == 7 {
+                return "Permissions insuffisantes (Firestore). Vérifie les Rules pour /users et /usernames."
+            }
+            return error.localizedDescription
+        }
+
         return error.localizedDescription
     }
 }

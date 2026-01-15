@@ -9,13 +9,14 @@ import FirebaseAuth
 
 struct AuthView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var session: SessionStore
 
     @State private var mode: Mode = .signIn
 
     @State private var email: String = ""
     @State private var password: String = ""
 
-    // ✅ Username (signup seulement) — sans "." (lettres/chiffres/_)
+    // ✅ Username (signup seulement) — lettres/chiffres/_ seulement
     @State private var username: String = ""
 
     @State private var isWorking = false
@@ -50,8 +51,16 @@ struct AuthView: View {
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .keyboardType(.asciiCapable)
+                            .onChange(of: username) { _, newValue in
+                                // ✅ sanitize live (aligné Rules)
+                                let cleaned = UsersService.normalizeUsername(newValue)
+                                if cleaned != newValue { username = cleaned }
+                                if username.count > 20 {
+                                    username = String(username.prefix(20))
+                                }
+                            }
 
-                        Text("3-30 caractères. Lettres, chiffres et _")
+                        Text("3–20 caractères. Lettres, chiffres et _")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -126,8 +135,10 @@ struct AuthView: View {
     private var canSubmit: Bool {
         if isWorking || isResettingPassword { return false }
         if email.trimmed.isEmpty || password.trimmed.isEmpty { return false }
+
         if mode == .signUp {
-            return !username.trimmed.isEmpty
+            let cleaned = UsersService.normalizeUsername(username)
+            return UsersService.isValidUsername(cleaned)
         }
         return true
     }
@@ -138,22 +149,36 @@ struct AuthView: View {
 
         let cleanEmail = email.trimmed
         let cleanPass = password
+        let cleanUsername = UsersService.normalizeUsername(username)
 
         Task {
             do {
                 if mode == .signIn {
                     _ = try await Auth.auth().signIn(withEmail: cleanEmail, password: cleanPass)
-                } else {
-                    _ = try await Auth.auth().createUser(withEmail: cleanEmail, password: cleanPass)
+                    await session.refreshUser()
 
-                    // ✅ Crée profil + réserve username (immuable)
-                    try await usersService.createProfileWithUsername(username: username.trimmed)
+                } else {
+                    // 1) Auth
+                    let result = try await Auth.auth().createUser(withEmail: cleanEmail, password: cleanPass)
+
+                    // 2) Firestore profile + username reservation + displayName
+                    do {
+                        try await usersService.createProfileWithUsername(username: cleanUsername)
+                    } catch {
+                        // ✅ évite un compte Auth “fantôme” si Firestore/rules échoue
+                        try? await result.user.delete()
+                        throw error
+                    }
+
+                    // 3) Refresh session pour refléter displayName immédiatement
+                    await session.refreshUser()
                 }
 
                 await MainActor.run {
                     isWorking = false
                     dismiss()
                 }
+
             } catch {
                 await MainActor.run {
                     isWorking = false
@@ -187,7 +212,6 @@ struct AuthView: View {
             } catch {
                 await MainActor.run {
                     isResettingPassword = false
-                    // Souvent Firebase renvoie des erreurs détaillées; on les affiche.
                     errorText = error.localizedDescription
                 }
             }
@@ -198,3 +222,4 @@ struct AuthView: View {
 private extension String {
     var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) }
 }
+

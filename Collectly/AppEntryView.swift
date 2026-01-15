@@ -8,92 +8,91 @@ import SwiftUI
 import FirebaseAuth
 
 /// ✅ Objectif:
-/// - Toujours afficher RootTabView (Marketplace + Ma collection + Profil)
-/// - Ne jamais bloquer l’app sur AuthView au démarrage
-/// - Si l’utilisateur est connecté mais n’a pas de username,
-///   on peut afficher un sheet "Username" (non bloquant, avec bouton Plus tard)
+/// - Toujours afficher RootTabView
+/// - Si connecté mais pas de username -> afficher un sheet non bloquant (Plus tard)
 struct AppEntryView: View {
     @EnvironmentObject private var session: SessionStore
 
-    @State private var isCheckingUsername = false
-    @State private var hasUsername: Bool? = nil
-    @State private var errorText: String? = nil
-
+    @State private var isChecking = false
     @State private var showUsernameGate = false
+    @State private var errorText: String? = nil
 
     private let usersService = UsersService()
 
     var body: some View {
         RootTabView()
-            // ✅ On fait la vérification en arrière-plan (si connecté),
-            // mais on n’empêche pas l’utilisateur d’accéder à Marketplace.
-            .onAppear {
-                checkUsernameIfNeeded()
+            // ✅ Plus fiable que onAppear/onChange : se déclenche quand uid change
+            .task(id: session.user?.uid) {
+                await checkUsernameIfNeeded(force: true)
             }
-            .onChange(of: session.user?.uid) { _, _ in
-                // Quand on change de compte (login/logout), on reset et on revérifie
-                hasUsername = nil
-                errorText = nil
-                showUsernameGate = false
-                checkUsernameIfNeeded(force: true)
-            }
-            // ✅ Gate username en sheet (non bloquant)
             .sheet(isPresented: $showUsernameGate) {
                 UsernameGateSheet(
                     errorText: errorText,
                     onDone: {
-                        // après création, on revérifie
-                        hasUsername = nil
+                        // ✅ fermer tout de suite
+                        showUsernameGate = false
                         errorText = nil
-                        checkUsernameIfNeeded(force: true)
+
+                        // puis recheck (au cas où)
+                        Task { await checkUsernameIfNeeded(force: true) }
                     },
                     onLater: {
-                        // L’utilisateur peut continuer à naviguer (Marketplace etc.)
                         showUsernameGate = false
                     }
                 )
             }
     }
 
-    private func checkUsernameIfNeeded(force: Bool = false) {
-        // Pas connecté -> rien à vérifier
+    @MainActor
+    private func checkUsernameIfNeeded(force: Bool = false) async {
+        // pas connecté -> pas de gate
         guard session.user != nil else {
-            hasUsername = nil
             showUsernameGate = false
             return
         }
 
-        if isCheckingUsername { return }
-        if !force, hasUsername != nil { return }
+        if isChecking { return }
+        if !force, showUsernameGate { return }
 
-        isCheckingUsername = true
+        isChecking = true
         errorText = nil
 
-        Task {
-            do {
-                let ok = try await usersService.currentUserHasUsername()
-                await MainActor.run {
-                    self.hasUsername = ok
-                    self.isCheckingUsername = false
+        let uid = session.user?.uid ?? "nil"
+        print("🔎 Username check started. uid=\(uid)")
 
-                    // Si connecté mais pas de username -> on propose le gate (sheet)
-                    self.showUsernameGate = (ok == false)
-                }
-            } catch {
-                await MainActor.run {
-                    self.errorText = error.localizedDescription
-                    self.hasUsername = false
-                    self.isCheckingUsername = false
+        do {
+            // 1) Premier check
+            let existing1 = try await usersService.getCurrentUsername()
+            let has1 = !(existing1?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            print("🔎 Username check #1 result: \(existing1 ?? "nil") (has=\(has1))")
 
-                    // En cas d’erreur, on affiche quand même le gate
-                    self.showUsernameGate = true
-                }
+            if has1 {
+                isChecking = false
+                showUsernameGate = false
+                return
             }
+
+            // 2) Retry (timing post-signup)
+            try? await Task.sleep(nanoseconds: 450_000_000) // 0.45s
+
+            let existing2 = try await usersService.getCurrentUsername()
+            let has2 = !(existing2?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            print("🔎 Username check #2 result: \(existing2 ?? "nil") (has=\(has2))")
+
+            isChecking = false
+            showUsernameGate = (has2 == false)
+
+        } catch {
+            // ✅ Ne pas forcer le gate sur une erreur temporaire
+            print("⚠️ Username check error: \(error.localizedDescription)")
+            isChecking = false
+            errorText = error.localizedDescription
+            showUsernameGate = false
         }
     }
 }
 
-/// ✅ Wrapper pour que UsernameGateView ait un bouton "Plus tard"
+/// ✅ Wrapper: ajoute "Plus tard" dans la barre
 private struct UsernameGateSheet: View {
     let errorText: String?
     let onDone: () -> Void
@@ -102,6 +101,7 @@ private struct UsernameGateSheet: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+
                 if let errorText {
                     VStack(spacing: 8) {
                         Text("⚠️ \(errorText)")
@@ -117,7 +117,7 @@ private struct UsernameGateSheet: View {
                 UsernameGateView(onDone: onDone)
                     .padding(.top, 8)
             }
-            .navigationTitle("Créer un username")
+            .navigationTitle("Profil")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {

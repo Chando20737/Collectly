@@ -23,7 +23,14 @@ struct ProfileView: View {
     @State private var isSavingUsername: Bool = false
     @State private var isSendingPasswordReset: Bool = false
 
+    // ✅ NOUVEAU: évite l’effet “ça redemande”
+    @State private var isLoadingUsername: Bool = false
+
     private let db = Firestore.firestore()
+
+    // Aligné sur tes rules actuelles: ^[A-Za-z0-9_]+$
+    private let minUsernameLength = 3
+    private let maxUsernameLength = 20
 
     var body: some View {
         NavigationStack {
@@ -62,16 +69,47 @@ struct ProfileView: View {
                 if session.user != nil {
                     Section("Nom d’utilisateur") {
 
-                        TextField("Nom d’utilisateur", text: $username)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .disabled(hasUsername)
+                        // ✅ Pendant le chargement: on ne montre PAS le champ
+                        // -> évite l’impression que l’app “redemande”
+                        if isLoadingUsername {
+                            HStack(spacing: 10) {
+                                ProgressView()
+                                Text("Chargement du username…")
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else if hasUsername {
+                            HStack {
+                                Text("Username")
+                                Spacer()
+                                Text(username)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
 
-                        if !hasUsername {
+                            Text("✅ Username défini.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+
+                        } else {
+                            TextField("Nom d’utilisateur", text: $username)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .onChange(of: username) { _, newValue in
+                                    let cleaned = sanitizeUsername(newValue)
+                                    if cleaned != newValue { username = cleaned }
+                                    if username.count > maxUsernameLength {
+                                        username = String(username.prefix(maxUsernameLength))
+                                    }
+                                }
+
+                            Text("3–20 caractères. Lettres, chiffres et _.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+
                             Button(isSavingUsername ? "Enregistrement…" : "Enregistrer") {
                                 Task { await saveUsernameOnce() }
                             }
-                            .disabled(isSavingUsername || username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .disabled(isSavingUsername || !isUsernameValid(username))
                         }
                     }
                 }
@@ -113,6 +151,19 @@ struct ProfileView: View {
         }
     }
 
+    // MARK: - Username helpers (alignés aux Rules)
+
+    private func sanitizeUsername(_ input: String) -> String {
+        let lowered = input.lowercased()
+        let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789_")
+        return String(lowered.filter { allowed.contains($0) })
+    }
+
+    private func isUsernameValid(_ u: String) -> Bool {
+        let v = u.trimmingCharacters(in: .whitespacesAndNewlines)
+        return v.count >= minUsernameLength && v.count <= maxUsernameLength
+    }
+
     // MARK: - Load profile
 
     private func loadProfile() {
@@ -124,12 +175,65 @@ struct ProfileView: View {
             return
         }
 
-        db.collection("users").document(uid).getDocument { snap, _ in
-            let data = snap?.data() ?? [:]
-            let current = (data["username"] as? String) ?? ""
+        // ✅ On passe en mode loading pour éviter l’effet “ça redemande”
+        isLoadingUsername = true
 
-            self.username = current
-            self.hasUsername = !current.isEmpty
+        // Fallback immédiat: Auth.displayName (si dispo)
+        if let dn = Auth.auth().currentUser?.displayName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !dn.isEmpty {
+            let normalized = sanitizeUsername(dn)
+            if isUsernameValid(normalized) {
+                username = normalized
+                hasUsername = true
+            }
+        }
+
+        db.collection("users").document(uid).getDocument { snap, err in
+            DispatchQueue.main.async {
+                self.isLoadingUsername = false
+
+                if let err {
+                    // IMPORTANT: ne plus ignorer l’erreur
+                    self.errorText = err.localizedDescription
+                    // On garde le fallback displayName si on l’avait
+                    return
+                }
+
+                let data = snap?.data() ?? [:]
+                let current = (data["username"] as? String) ?? ""
+                let normalized = self.sanitizeUsername(current)
+
+                if !normalized.isEmpty && self.isUsernameValid(normalized) {
+                    self.username = normalized
+                    self.hasUsername = true
+                    return
+                }
+
+                // Si Firestore vide mais displayName existe -> backfill
+                if let dn = Auth.auth().currentUser?.displayName?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !dn.isEmpty {
+                    let dnNorm = self.sanitizeUsername(dn)
+                    if self.isUsernameValid(dnNorm) {
+                        self.username = dnNorm
+                        self.hasUsername = true
+                        Task { await self.backfillUsernameIfNeeded(uid: uid, username: dnNorm) }
+                        return
+                    }
+                }
+
+                // Rien -> le champ apparait seulement maintenant
+                self.username = ""
+                self.hasUsername = false
+            }
+        }
+    }
+
+    @MainActor
+    private func backfillUsernameIfNeeded(uid: String, username: String) async {
+        do {
+            try await runUsernameTransaction(uid: uid, newUsername: username)
+        } catch {
+            // silencieux (optionnel)
         }
     }
 
@@ -140,6 +244,7 @@ struct ProfileView: View {
         successText = nil
         isSavingUsername = false
         isSendingPasswordReset = false
+        isLoadingUsername = false
     }
 
     // MARK: - Save username (set once)
@@ -153,9 +258,9 @@ struct ProfileView: View {
             return
         }
 
-        let newName = username.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !newName.isEmpty else {
-            errorText = "Nom d’utilisateur invalide."
+        let newName = sanitizeUsername(username.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard isUsernameValid(newName) else {
+            errorText = "Nom d’utilisateur invalide. Utilise 3–20 caractères: lettres, chiffres et _."
             return
         }
 
@@ -164,13 +269,22 @@ struct ProfileView: View {
 
         do {
             try await runUsernameTransaction(uid: uid, newUsername: newName)
+
+            // Écrire aussi dans Auth.displayName
+            if let user = Auth.auth().currentUser {
+                let change = user.createProfileChangeRequest()
+                change.displayName = newName
+                try await change.commitChanges()
+            }
+
             await MainActor.run {
+                username = newName
                 hasUsername = true
                 successText = "Nom d’utilisateur enregistré."
             }
         } catch {
             await MainActor.run {
-                errorText = error.localizedDescription
+                errorText = humanizeProfileError(error)
             }
         }
     }
@@ -231,6 +345,20 @@ struct ProfileView: View {
         }
     }
 
+    private func humanizeProfileError(_ error: Error) -> String {
+        let ns = error as NSError
+
+        if ns.domain.contains("FIRFirestoreErrorDomain") && ns.code == 7 {
+            return "Permissions insuffisantes (Firestore). Vérifie tes Rules pour /users et /usernames."
+        }
+
+        if ns.domain == "Profile" && ns.code == 409 {
+            return ns.localizedDescription
+        }
+
+        return error.localizedDescription
+    }
+
     // MARK: - Password reset
 
     private func sendPasswordReset(email: String?) {
@@ -241,12 +369,14 @@ struct ProfileView: View {
         isSendingPasswordReset = true
 
         Auth.auth().sendPasswordReset(withEmail: email) { error in
-            isSendingPasswordReset = false
+            DispatchQueue.main.async {
+                self.isSendingPasswordReset = false
 
-            if let error {
-                errorText = error.localizedDescription
-            } else {
-                successText = "Courriel de réinitialisation envoyé."
+                if let error {
+                    self.errorText = error.localizedDescription
+                } else {
+                    self.successText = "Courriel de réinitialisation envoyé."
+                }
             }
         }
     }

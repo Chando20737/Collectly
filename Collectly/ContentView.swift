@@ -44,6 +44,10 @@ struct ContentView: View {
     @State private var pendingDeleteItems: [CardItem] = []
     @State private var showDeleteConfirm = false
 
+    // ✅ Fusionner
+    @State private var pendingMergeItems: [CardItem] = []
+    @State private var showMergeConfirm = false
+
     // ✅ Forcer refresh UI quand on toggle favoris / quantité (UserDefaults)
     @State private var favoritesTick: Int = 0
     @State private var quantityTick: Int = 0
@@ -195,7 +199,7 @@ struct ContentView: View {
 
                 let items = filteredSortedAndFilteredCards
                 let totalValue = totalEstimatedValue(of: items)
-                let totalCopies = totalCopiesCount(of: items)
+                let totalCopies = totalQuantity(of: items)
 
                 let groupedSections: [CollectionSection] = {
                     if groupBy == .none { return [] }
@@ -272,6 +276,7 @@ struct ContentView: View {
                     if isSelectionMode {
                         CollectionSelectionToolbar(
                             selectedCount: selectedIds.count,
+                            onMerge: { beginMergeFlow(in: items) },
                             onIncrementQty: { incrementSelectedQuantity(in: items) },
                             onDecrementQty: { decrementSelectedQuantity(in: items) },
                             onFavorite: { favoriteSelected(in: items) },
@@ -446,7 +451,14 @@ struct ContentView: View {
                     if isSelectionMode { pruneSelection(visibleItems: filteredSortedAndFilteredCards) }
                 }
                 .sheet(isPresented: $showAddSheet) { AddCardView() }
-                .sheet(item: $quickEditCard) { card in CardQuickEditView(card: card) }
+                .sheet(item: $quickEditCard) { card in
+                    CardQuickEditView(card: card)
+                        .onDisappear {
+                            // refresh quantité / favoris (si quick edit touche à ça ailleurs)
+                            favoritesTick += 1
+                            quantityTick += 1
+                        }
+                }
                 .alert("Erreur", isPresented: Binding(
                     get: { uiErrorText != nil },
                     set: { if !$0 { uiErrorText = nil } }
@@ -467,6 +479,19 @@ struct ContentView: View {
                     Text(count <= 1
                          ? "Supprimer cette carte? Cette action est irréversible."
                          : "Supprimer ces \(count) cartes? Cette action est irréversible.")
+                }
+                .alert("Fusionner", isPresented: $showMergeConfirm) {
+                    Button("Annuler", role: .cancel) { pendingMergeItems = [] }
+                    Button("Fusionner", role: .destructive) {
+                        let toMerge = pendingMergeItems
+                        pendingMergeItems = []
+                        mergeItemsNow(toMerge)
+                    }
+                } message: {
+                    let count = pendingMergeItems.count
+                    Text(count <= 1
+                         ? "Sélectionne au moins 2 cartes à fusionner."
+                         : "Fusionner \(count) cartes en une seule? Les autres seront supprimées (quantités additionnées).")
                 }
             }
         }
@@ -535,29 +560,52 @@ struct ContentView: View {
         Haptics.light()
     }
 
-    // MARK: - ✅ Batch quantity actions
+    // MARK: - Quantity (doubles)
+
+    private func quantity(_ card: CardItem) -> Int {
+        QuantityStore.quantity(id: card.id)
+    }
+
+    private func setQuantity(_ q: Int, for card: CardItem) {
+        QuantityStore.setQuantity(max(1, q), id: card.id)
+        quantityTick += 1
+    }
 
     private func incrementSelectedQuantity(in currentItems: [CardItem]) {
         guard !selectedIds.isEmpty else { return }
         let ids = selectedIds
         for c in currentItems where ids.contains(c.id) {
-            QuantityStore.increment(id: c.id, by: 1)
+            let q = QuantityStore.quantity(id: c.id)
+            QuantityStore.setQuantity(q + 1, id: c.id)
         }
         quantityTick += 1
         Haptics.success()
+        exitSelectionMode()
     }
 
     private func decrementSelectedQuantity(in currentItems: [CardItem]) {
         guard !selectedIds.isEmpty else { return }
         let ids = selectedIds
         for c in currentItems where ids.contains(c.id) {
-            QuantityStore.decrement(id: c.id, by: 1) // clamp min=1
+            let q = QuantityStore.quantity(id: c.id)
+            QuantityStore.setQuantity(max(1, q - 1), id: c.id)
         }
         quantityTick += 1
         Haptics.success()
+        exitSelectionMode()
     }
 
     // MARK: - Favorites
+
+    private func toggleFavorite(_ card: CardItem) {
+        FavoritesStore.toggle(id: card.id)
+        favoritesTick += 1
+        Haptics.light()
+    }
+
+    private func isFavorite(_ card: CardItem) -> Bool {
+        FavoritesStore.isFavorite(id: card.id)
+    }
 
     private func favoriteSelected(in currentItems: [CardItem]) {
         guard !selectedIds.isEmpty else { return }
@@ -577,32 +625,168 @@ struct ContentView: View {
         exitSelectionMode()
     }
 
+    // MARK: - Merge
+
+    private func beginMergeFlow(in currentItems: [CardItem]) {
+        guard selectedIds.count >= 2 else {
+            Haptics.warning()
+            uiErrorText = "Sélectionne au moins 2 cartes pour fusionner."
+            return
+        }
+
+        let ids = selectedIds
+        let items = currentItems.filter { ids.contains($0.id) }
+
+        guard items.count >= 2 else {
+            Haptics.warning()
+            uiErrorText = "Sélection invalide."
+            return
+        }
+
+        pendingMergeItems = items
+        Haptics.warning()
+        showMergeConfirm = true
+    }
+
+    private func mergeItemsNow(_ items: [CardItem]) {
+        guard items.count >= 2 else { return }
+
+        // Master = plus récente
+        let sorted = items.sorted { $0.createdAt > $1.createdAt }
+        let master = sorted[0]
+        let others = Array(sorted.dropFirst())
+
+        // Addition des quantités
+        var totalQty = QuantityStore.quantity(id: master.id)
+        for o in others {
+            totalQty += QuantityStore.quantity(id: o.id)
+        }
+        QuantityStore.setQuantity(totalQty, id: master.id)
+
+        // Fusion best-effort
+        mergeFillIfMissing(master: master, from: others)
+
+        // Favoris: si un des items est favori -> master favori
+        let anyFavorite = FavoritesStore.isFavorite(id: master.id) || others.contains(where: { FavoritesStore.isFavorite(id: $0.id) })
+        if anyFavorite { FavoritesStore.set(true, id: master.id) }
+
+        Task {
+            for o in others {
+                await marketplace.endListingIfExistsForDeletedCard(cardItemId: o.id.uuidString)
+            }
+
+            await MainActor.run {
+                for o in others {
+                    FavoritesStore.clear(id: o.id)
+                    QuantityStore.clear(id: o.id)
+                    modelContext.delete(o)
+                }
+
+                do {
+                    try modelContext.save()
+                    favoritesTick += 1
+                    quantityTick += 1
+                    Haptics.success()
+                    exitSelectionMode()
+                } catch {
+                    uiErrorText = error.localizedDescription
+                    Haptics.error()
+                }
+            }
+        }
+    }
+
+    private func mergeFillIfMissing(master: CardItem, from others: [CardItem]) {
+
+        func pickFirstNonEmptyString(_ keyPath: KeyPath<CardItem, String?>) -> String? {
+            for o in others {
+                let v = (o[keyPath: keyPath] ?? "").trimmedLocal
+                if !v.isEmpty { return v }
+            }
+            return nil
+        }
+
+        func pickFirstNonNilData(_ keyPath: KeyPath<CardItem, Data?>) -> Data? {
+            for o in others {
+                if let d = o[keyPath: keyPath], !d.isEmpty { return d }
+            }
+            return nil
+        }
+
+        // Photo
+        if master.frontImageData == nil || master.frontImageData?.isEmpty == true {
+            if let d = pickFirstNonNilData(\.frontImageData) {
+                master.frontImageData = d
+            }
+        }
+
+        // Notes
+        if (master.notes ?? "").trimmedLocal.isEmpty {
+            if let v = pickFirstNonEmptyString(\.notes) { master.notes = v }
+        }
+
+        // Valeur (prend première > 0)
+        if (master.estimatedPriceCAD ?? 0) <= 0 {
+            for o in others {
+                if let v = o.estimatedPriceCAD, v > 0 {
+                    master.estimatedPriceCAD = v
+                    break
+                }
+            }
+        }
+
+        // Champs texte
+        if (master.playerName ?? "").trimmedLocal.isEmpty {
+            if let v = pickFirstNonEmptyString(\.playerName) { master.playerName = v }
+        }
+        if (master.cardYear ?? "").trimmedLocal.isEmpty {
+            if let v = pickFirstNonEmptyString(\.cardYear) { master.cardYear = v }
+        }
+        if (master.setName ?? "").trimmedLocal.isEmpty {
+            if let v = pickFirstNonEmptyString(\.setName) { master.setName = v }
+        }
+        if (master.companyName ?? "").trimmedLocal.isEmpty {
+            if let v = pickFirstNonEmptyString(\.companyName) { master.companyName = v }
+        }
+        if (master.cardNumber ?? "").trimmedLocal.isEmpty {
+            if let v = pickFirstNonEmptyString(\.cardNumber) { master.cardNumber = v }
+        }
+        if (master.acquisitionSource ?? "").trimmedLocal.isEmpty {
+            if let v = pickFirstNonEmptyString(\.acquisitionSource) { master.acquisitionSource = v }
+        }
+
+        // Grading: si master incomplet, copie un ensemble complet
+        let masterCompany = (master.gradingCompany ?? "").trimmedLocal
+        let masterGrade = (master.gradeValue ?? "").trimmedLocal
+        let masterCert = (master.certificationNumber ?? "").trimmedLocal
+        let masterHasCompleteGrading = !masterCompany.isEmpty && !masterGrade.isEmpty
+
+        if !masterHasCompleteGrading {
+            for o in others {
+                let c = (o.gradingCompany ?? "").trimmedLocal
+                let g = (o.gradeValue ?? "").trimmedLocal
+                if !c.isEmpty && !g.isEmpty {
+                    master.gradingCompany = c
+                    master.gradeValue = g
+
+                    let cert = (o.certificationNumber ?? "").trimmedLocal
+                    if masterCert.isEmpty && !cert.isEmpty {
+                        master.certificationNumber = cert
+                    }
+                    break
+                }
+            }
+        }
+    }
+
+    // MARK: - Confirm delete (batch)
+
     private func confirmDeleteSelected(in currentItems: [CardItem]) {
         guard !selectedIds.isEmpty else { return }
         let ids = selectedIds
         pendingDeleteItems = currentItems.filter { ids.contains($0.id) }
         Haptics.warning()
         showDeleteConfirm = true
-    }
-
-    private func toggleFavorite(_ card: CardItem) {
-        FavoritesStore.toggle(id: card.id)
-        favoritesTick += 1
-        Haptics.light()
-    }
-
-    private func isFavorite(_ card: CardItem) -> Bool {
-        FavoritesStore.isFavorite(id: card.id)
-    }
-
-    // ✅ Quantité helpers
-
-    private func quantity(_ card: CardItem) -> Int {
-        QuantityStore.quantity(id: card.id)
-    }
-
-    private func totalCopiesCount(of items: [CardItem]) -> Int {
-        items.reduce(0) { $0 + QuantityStore.quantity(id: $1.id) }
     }
 
     // MARK: - Persist / Restore
@@ -641,8 +825,8 @@ struct ContentView: View {
                     if isSelectionMode {
                         CollectionGridCard(
                             card: card,
-                            quantity: quantity(card),
                             isFavorite: isFavorite(card),
+                            quantity: quantity(card),
                             onToggleFavorite: { toggleFavorite(card) },
                             isSelected: isSelected(card),
                             selectionMode: true,
@@ -654,8 +838,8 @@ struct ContentView: View {
                         } label: {
                             CollectionGridCard(
                                 card: card,
-                                quantity: quantity(card),
                                 isFavorite: isFavorite(card),
+                                quantity: quantity(card),
                                 onToggleFavorite: { toggleFavorite(card) },
                                 isSelected: false,
                                 selectionMode: false,
@@ -674,6 +858,14 @@ struct ContentView: View {
                             }
                             Button { quickEditCard = card } label: {
                                 Label("Modifier", systemImage: "pencil")
+                            }
+                            Divider()
+                            Button {
+                                let newQ = quantity(card) + 1
+                                setQuantity(newQ, for: card)
+                                Haptics.light()
+                            } label: {
+                                Label("Ajouter un exemplaire (+1)", systemImage: "plus.circle")
                             }
                             Divider()
                             Button(role: .destructive) {
@@ -701,8 +893,8 @@ struct ContentView: View {
                 if isSelectionMode {
                     CollectionListRow(
                         card: card,
-                        quantity: quantity(card),
                         isFavorite: isFavorite(card),
+                        quantity: quantity(card),
                         onToggleFavorite: { toggleFavorite(card) },
                         isSelected: isSelected(card),
                         selectionMode: true,
@@ -715,8 +907,8 @@ struct ContentView: View {
                     } label: {
                         CollectionListRow(
                             card: card,
-                            quantity: quantity(card),
                             isFavorite: isFavorite(card),
+                            quantity: quantity(card),
                             onToggleFavorite: { toggleFavorite(card) },
                             isSelected: false,
                             selectionMode: false,
@@ -741,6 +933,15 @@ struct ContentView: View {
                                   systemImage: isFavorite(card) ? "star.slash" : "star.fill")
                         }
                         .tint(.yellow)
+
+                        Button {
+                            let newQ = quantity(card) + 1
+                            setQuantity(newQ, for: card)
+                            Haptics.light()
+                        } label: {
+                            Label("+1", systemImage: "plus.circle")
+                        }
+                        .tint(.mint)
 
                         Button(role: .destructive) {
                             pendingDeleteItems = [card]
@@ -790,8 +991,8 @@ struct ContentView: View {
                                 if isSelectionMode {
                                     CollectionGridCard(
                                         card: card,
-                                        quantity: quantity(card),
                                         isFavorite: isFavorite(card),
+                                        quantity: quantity(card),
                                         onToggleFavorite: { toggleFavorite(card) },
                                         isSelected: isSelected(card),
                                         selectionMode: true,
@@ -803,8 +1004,8 @@ struct ContentView: View {
                                     } label: {
                                         CollectionGridCard(
                                             card: card,
-                                            quantity: quantity(card),
                                             isFavorite: isFavorite(card),
+                                            quantity: quantity(card),
                                             onToggleFavorite: { toggleFavorite(card) },
                                             isSelected: false,
                                             selectionMode: false,
@@ -858,8 +1059,8 @@ struct ContentView: View {
                             if isSelectionMode {
                                 CollectionListRow(
                                     card: card,
-                                    quantity: quantity(card),
                                     isFavorite: isFavorite(card),
+                                    quantity: quantity(card),
                                     onToggleFavorite: { toggleFavorite(card) },
                                     isSelected: isSelected(card),
                                     selectionMode: true,
@@ -872,8 +1073,8 @@ struct ContentView: View {
                                 } label: {
                                     CollectionListRow(
                                         card: card,
-                                        quantity: quantity(card),
                                         isFavorite: isFavorite(card),
+                                        quantity: quantity(card),
                                         onToggleFavorite: { toggleFavorite(card) },
                                         isSelected: false,
                                         selectionMode: false,
@@ -1182,10 +1383,14 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Total value
+    // MARK: - Total value + copies
 
     private func totalEstimatedValue(of items: [CardItem]) -> Double {
         items.reduce(0) { $0 + max(0, $1.estimatedPriceCAD ?? 0) }
+    }
+
+    private func totalQuantity(of items: [CardItem]) -> Int {
+        items.reduce(0) { $0 + QuantityStore.quantity(id: $1.id) }
     }
 
     // MARK: - Delete (sync Marketplace + clean favorites + quantity)
@@ -1411,9 +1616,8 @@ private struct SectionCard<Content: View>: View {
 
 private struct CollectionGridCard: View {
     let card: CardItem
-    let quantity: Int
-
     let isFavorite: Bool
+    let quantity: Int
     let onToggleFavorite: () -> Void
 
     let isSelected: Bool
@@ -1448,7 +1652,7 @@ private struct CollectionGridCard: View {
                         }
 
                         if quantity > 1 {
-                            QuantityBadge(qty: quantity)
+                            QuantityPill(text: "x\(quantity)")
                         }
 
                         if let label = card.gradingLabel {
@@ -1489,16 +1693,16 @@ private struct CollectionGridCard: View {
         }
     }
 
-    private struct QuantityBadge: View {
-        let qty: Int
+    private struct QuantityPill: View {
+        let text: String
         var body: some View {
-            Text("x\(qty)")
-                .font(.caption2.weight(.bold))
+            Text(text)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
-                .background(Capsule(style: .continuous).fill(Color(.systemBackground).opacity(0.9)))
-                .overlay(Capsule(style: .continuous).stroke(Color.black.opacity(0.10), lineWidth: 1))
-                .foregroundStyle(.secondary)
+                .background(Capsule(style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
+                .overlay(Capsule(style: .continuous).stroke(Color.black.opacity(0.06), lineWidth: 1))
         }
     }
 }
@@ -1507,9 +1711,8 @@ private struct CollectionGridCard: View {
 
 private struct CollectionListRow: View {
     let card: CardItem
-    let quantity: Int
-
     let isFavorite: Bool
+    let quantity: Int
     let onToggleFavorite: () -> Void
 
     let isSelected: Bool
@@ -1529,7 +1732,8 @@ private struct CollectionListRow: View {
                 }
 
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 8) {
+
+                HStack(spacing: 6) {
                     Text(card.title)
                         .font(.headline)
                         .lineLimit(2)
@@ -1537,10 +1741,10 @@ private struct CollectionListRow: View {
 
                     if quantity > 1 {
                         Text("x\(quantity)")
-                            .font(.caption.weight(.bold))
+                            .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
+                            .padding(.vertical, 2)
                             .background(Capsule(style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
                     }
 
@@ -1711,6 +1915,44 @@ private enum Haptics {
         let gen = UINotificationFeedbackGenerator()
         gen.prepare()
         gen.notificationOccurred(.error)
+    }
+}
+
+// MARK: - ✅ QuantityStore (UserDefaults)
+
+private enum QuantityStore {
+    private static let key = "collection.quantityByCardId" // [String: Int]
+
+    static func quantity(id: UUID) -> Int {
+        let dict = load()
+        let v = dict[id.uuidString] ?? 1
+        return max(1, v)
+    }
+
+    static func setQuantity(_ quantity: Int, id: UUID) {
+        var dict = load()
+        dict[id.uuidString] = max(1, quantity)
+        save(dict)
+    }
+
+    static func clear(id: UUID) {
+        var dict = load()
+        dict.removeValue(forKey: id.uuidString)
+        save(dict)
+    }
+
+    private static func load() -> [String: Int] {
+        let obj = UserDefaults.standard.dictionary(forKey: key) ?? [:]
+        var out: [String: Int] = [:]
+        for (k, v) in obj {
+            if let i = v as? Int { out[k] = i }
+            else if let n = v as? NSNumber { out[k] = n.intValue }
+        }
+        return out
+    }
+
+    private static func save(_ dict: [String: Int]) {
+        UserDefaults.standard.set(dict, forKey: key)
     }
 }
 

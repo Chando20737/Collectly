@@ -122,7 +122,7 @@ struct ContentView: View {
         }
     }
 
-    // ✅ AJOUT: filtres “Champs manquants”
+    // ✅ Filtres + “Champs manquants”
     enum FilterOption: String, CaseIterable, Identifiable {
         case all = "Toutes"
         case favorites = "Favoris"
@@ -146,13 +146,10 @@ struct ContentView: View {
             switch self {
             case .all: return "line.3.horizontal.decrease.circle"
             case .favorites: return "star.fill"
-
             case .withValue: return "dollarsign.circle"
             case .withoutValue: return "dollarsign.circle.fill"
-
             case .withNotes: return "note.text"
             case .withoutNotes: return "note.text.badge.plus"
-
             case .missingPhoto: return "photo.badge.exclamationmark"
             case .missingYear: return "calendar.badge.exclamationmark"
             case .missingSet: return "square.stack.3d.up.badge.exclamationmark"
@@ -173,10 +170,8 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-
             // ✅ Déconnecté -> on cache la collection
             if session.user == nil {
-
                 ContentUnavailableView(
                     "Ma collection",
                     systemImage: "rectangle.stack",
@@ -274,6 +269,9 @@ struct ContentView: View {
 
                     // ✅ Barre multi-sélection
                     if isSelectionMode {
+                        // ✅ IMPORTANT:
+                        // CollectionSelectionToolbar doit exister dans un autre fichier (pas ici),
+                        // sinon tu vas avoir "Invalid redeclaration".
                         CollectionSelectionToolbar(
                             selectedCount: selectedIds.count,
                             onMerge: { beginMergeFlow(in: items) },
@@ -295,15 +293,11 @@ struct ContentView: View {
                     ToolbarItem(placement: .topBarLeading) {
                         if isSelectionMode {
                             Menu {
-                                Button {
-                                    selectAllVisible(items)
-                                } label: {
+                                Button { selectAllVisible(items) } label: {
                                     Label("Tout sélectionner", systemImage: "checkmark.circle")
                                 }
 
-                                Button {
-                                    clearSelection()
-                                } label: {
+                                Button { clearSelection() } label: {
                                     Label("Tout désélectionner", systemImage: "circle")
                                 }
 
@@ -319,10 +313,8 @@ struct ContentView: View {
                             }
                             .accessibilityLabel("Actions de sélection")
                         } else {
-                            Button("Sélectionner") {
-                                enterSelectionMode()
-                            }
-                            .accessibilityLabel("Activer la sélection")
+                            Button("Sélectionner") { enterSelectionMode() }
+                                .accessibilityLabel("Activer la sélection")
                         }
                     }
 
@@ -330,8 +322,6 @@ struct ContentView: View {
                     if !isSelectionMode {
                         ToolbarItem(placement: .topBarLeading) {
                             Menu {
-
-                                // ✅ 1) Base
                                 Section("Filtrer") {
                                     Picker("Filtrer", selection: $filter) {
                                         Label(FilterOption.all.rawValue, systemImage: FilterOption.all.systemImage).tag(FilterOption.all)
@@ -345,7 +335,6 @@ struct ContentView: View {
 
                                 Divider()
 
-                                // ✅ 2) Champs manquants
                                 Section("Champs manquants") {
                                     Button { filter = .missingPhoto } label: {
                                         Label(FilterOption.missingPhoto.rawValue, systemImage: FilterOption.missingPhoto.systemImage)
@@ -366,9 +355,7 @@ struct ContentView: View {
 
                                 if filter != .all {
                                     Divider()
-                                    Button(role: .destructive) {
-                                        filter = .all
-                                    } label: {
+                                    Button(role: .destructive) { filter = .all } label: {
                                         Label("Réinitialiser les filtres", systemImage: "xmark.circle")
                                     }
                                 }
@@ -454,7 +441,7 @@ struct ContentView: View {
                 .sheet(item: $quickEditCard) { card in
                     CardQuickEditView(card: card)
                         .onDisappear {
-                            // refresh quantité / favoris (si quick edit touche à ça ailleurs)
+                            // refresh quantité / favoris
                             favoritesTick += 1
                             quantityTick += 1
                         }
@@ -561,6 +548,7 @@ struct ContentView: View {
     }
 
     // MARK: - Quantity (doubles)
+    // ⚠️ IMPORTANT: QuantityStore doit exister dans un fichier séparé (QuantityStore.swift)
 
     private func quantity(_ card: CardItem) -> Int {
         QuantityStore.quantity(id: card.id)
@@ -658,9 +646,7 @@ struct ContentView: View {
 
         // Addition des quantités
         var totalQty = QuantityStore.quantity(id: master.id)
-        for o in others {
-            totalQty += QuantityStore.quantity(id: o.id)
-        }
+        for o in others { totalQty += QuantityStore.quantity(id: o.id) }
         QuantityStore.setQuantity(totalQty, id: master.id)
 
         // Fusion best-effort
@@ -715,9 +701,7 @@ struct ContentView: View {
 
         // Photo
         if master.frontImageData == nil || master.frontImageData?.isEmpty == true {
-            if let d = pickFirstNonNilData(\.frontImageData) {
-                master.frontImageData = d
-            }
+            if let d = pickFirstNonNilData(\.frontImageData) { master.frontImageData = d }
         }
 
         // Notes
@@ -1143,9 +1127,7 @@ struct ContentView: View {
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 4)
-                                .background(
-                                    Capsule(style: .continuous).fill(Color(.secondarySystemGroupedBackground))
-                                )
+                                .background(Capsule(style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
                         }
                         .padding(.vertical, 6)
                         .contentShape(Rectangle())
@@ -1319,7 +1301,6 @@ struct ContentView: View {
             case .withoutNotes:
                 return (card.notes?.trimmedLocal.isEmpty ?? true)
 
-            // ✅ Champs manquants
             case .missingPhoto:
                 return (card.frontImageData == nil || card.frontImageData?.isEmpty == true)
             case .missingYear:
@@ -1655,6 +1636,9 @@ private struct CollectionGridCard: View {
                             QuantityPill(text: "x\(quantity)")
                         }
 
+                        // ✅ IMPORTANT:
+                        // GradingOverlayBadge doit exister dans un autre fichier (pas ici),
+                        // sinon tu vas avoir "Invalid redeclaration".
                         if let label = card.gradingLabel {
                             GradingOverlayBadge(label: label, compact: false)
                         }
@@ -1915,44 +1899,6 @@ private enum Haptics {
         let gen = UINotificationFeedbackGenerator()
         gen.prepare()
         gen.notificationOccurred(.error)
-    }
-}
-
-// MARK: - ✅ QuantityStore (UserDefaults)
-
-private enum QuantityStore {
-    private static let key = "collection.quantityByCardId" // [String: Int]
-
-    static func quantity(id: UUID) -> Int {
-        let dict = load()
-        let v = dict[id.uuidString] ?? 1
-        return max(1, v)
-    }
-
-    static func setQuantity(_ quantity: Int, id: UUID) {
-        var dict = load()
-        dict[id.uuidString] = max(1, quantity)
-        save(dict)
-    }
-
-    static func clear(id: UUID) {
-        var dict = load()
-        dict.removeValue(forKey: id.uuidString)
-        save(dict)
-    }
-
-    private static func load() -> [String: Int] {
-        let obj = UserDefaults.standard.dictionary(forKey: key) ?? [:]
-        var out: [String: Int] = [:]
-        for (k, v) in obj {
-            if let i = v as? Int { out[k] = i }
-            else if let n = v as? NSNumber { out[k] = n.intValue }
-        }
-        return out
-    }
-
-    private static func save(_ dict: [String: Int]) {
-        UserDefaults.standard.set(dict, forKey: key)
     }
 }
 

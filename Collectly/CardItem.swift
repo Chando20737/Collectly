@@ -12,6 +12,9 @@ final class CardItem {
     var id: UUID
     var createdAt: Date
 
+    // ✅ IMPORTANT: associer la carte à un user Firebase
+    var ownerId: String
+
     // Affichage rapide / v0.1
     var title: String
     var notes: String?
@@ -29,38 +32,46 @@ final class CardItem {
     var setName: String?             // ex: "Series 1", "SP Authentic"
     var cardNumber: String?          // ex: "#201"
 
-    // ✅ Grading (IMPORTANT: optionnel pour migration)
-    var isGraded: Bool?              // nil = inconnu / non rempli, traité comme "Non" en UI
-    var gradingCompany: String?      // ex: "PSA", "BGS", "SGC", "CGC"
-    var gradeValue: String?          // ex: "10", "9.5"
-    var certificationNumber: String? // ex: "12345678"
+    // ✅ Grading
+    var isGraded: Bool?
+    var gradingCompany: String?
+    var gradeValue: String?
+    var certificationNumber: String?
 
-    // ✅ Acquisition
-    var acquisitionDate: Date?
-    var acquisitionSource: String?   // ex: "eBay", "Boutique", "Échange"
-    var purchasePriceCAD: Double?    // prix payé (CAD)
-
-    init(title: String, notes: String? = nil, frontImageData: Data? = nil) {
-        self.id = UUID()
-        self.createdAt = Date()
+    init(
+        id: UUID = UUID(),
+        createdAt: Date = Date(),
+        ownerId: String,
+        title: String,
+        notes: String? = nil,
+        frontImageData: Data? = nil,
+        estimatedPriceCAD: Double? = nil,
+        playerName: String? = nil,
+        cardYear: String? = nil,
+        companyName: String? = nil,
+        setName: String? = nil,
+        cardNumber: String? = nil,
+        isGraded: Bool? = nil,
+        gradingCompany: String? = nil,
+        gradeValue: String? = nil,
+        certificationNumber: String? = nil
+    ) {
+        self.id = id
+        self.createdAt = createdAt
+        self.ownerId = ownerId
         self.title = title
         self.notes = notes
         self.frontImageData = frontImageData
-        self.estimatedPriceCAD = nil
-
-        self.playerName = nil
-        self.cardYear = nil
-        self.companyName = nil
-        self.setName = nil
-        self.cardNumber = nil
-
-        self.isGraded = nil
-        self.gradingCompany = nil
-        self.gradeValue = nil
-        self.certificationNumber = nil
-
-        self.acquisitionDate = nil
-        self.acquisitionSource = nil
-        self.purchasePriceCAD = nil
+        self.estimatedPriceCAD = estimatedPriceCAD
+        self.playerName = playerName
+        self.cardYear = cardYear
+        self.companyName = companyName
+        self.setName = setName
+        self.cardNumber = cardNumber
+        self.isGraded = isGraded
+        self.gradingCompany = gradingCompany
+        self.gradeValue = gradeValue
+        self.certificationNumber = certificationNumber
     }
 }
+

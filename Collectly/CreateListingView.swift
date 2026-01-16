@@ -19,12 +19,15 @@ struct CreateListingView: View {
     private let minAuctionHours: Double = 8
     private let defaultAuctionDays: Int = 3
 
+    // ✅ NOUVEAU: minimum mise de départ
+    private let minStartingBidCAD: Double = 2
+
     @State private var type: ListingType = .fixedPrice
     @State private var title: String = ""
     @State private var descriptionText: String = ""
 
     @State private var buyNow: String = ""
-    @State private var startingBid: String = ""
+    @State private var startingBid: String = ""   // (on laisse l’utilisateur entrer)
 
     // ✅ Date/Time encan (géré via pickers custom)
     @State private var endDate: Date =
@@ -37,26 +40,15 @@ struct CreateListingView: View {
     @State private var isPublishing = false
     @State private var errorText: String?
 
-    // ✅ On garde ton service (pour annonces liées à une carte)
     private let marketplace = MarketplaceService()
-
-    // ✅ Repo (pour annonces libres)
     private let repo = MarketplaceRepository()
 
-    // Minutes autorisées
     private let quarterMinutes: [Int] = [0, 15, 30, 45]
 
-    private var cleanTitle: String {
-        title.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
+    private var cleanTitle: String { title.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var cleanDesc: String { descriptionText.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-    private var cleanDesc: String {
-        descriptionText.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var titleCountText: String {
-        "\(min(title.count, maxTitleLength))/\(maxTitleLength)"
-    }
+    private var titleCountText: String { "\(min(title.count, maxTitleLength))/\(maxTitleLength)" }
 
     private var canPublish: Bool {
         !isPublishing && !cleanTitle.isEmpty && cleanTitle.count <= maxTitleLength
@@ -86,19 +78,11 @@ struct CreateListingView: View {
 
     // MARK: - UI helpers
 
-    private var linkedCardTitle: String? {
-        card?.title
-    }
+    private var linkedCardTitle: String? { card?.title }
+    private var linkedCardImageData: Data? { card?.frontImageData }
+    private var navTitle: String { card == nil ? "Créer une annonce" : "Mettre en vente" }
 
-    private var linkedCardImageData: Data? {
-        card?.frontImageData
-    }
-
-    private var navTitle: String {
-        card == nil ? "Créer une annonce" : "Mettre en vente"
-    }
-
-    // MARK: - End date helpers (date + hour + quarter minute)
+    // MARK: - End date helpers
 
     private func roundedToQuarter(_ date: Date) -> Date {
         let cal = Calendar.current
@@ -115,7 +99,6 @@ struct CreateListingView: View {
         let d = roundedToQuarter(date)
         endDate = d
 
-        // synchroniser les pickers
         endDateOnly = cal.startOfDay(for: d)
         endHour = cal.component(.hour, from: d)
         let m = cal.component(.minute, from: d)
@@ -135,7 +118,6 @@ struct CreateListingView: View {
         let rebuilt = cal.date(from: comps) ?? endDate
         endDate = rebuilt
 
-        // clamp min 8h
         if type == .auction, endDate < minAuctionEndDate {
             setEndDate(minAuctionEndDate)
         }
@@ -144,7 +126,6 @@ struct CreateListingView: View {
     var body: some View {
         Form {
 
-            // ✅ Si liée à une carte, on le montre clairement
             if let c = card {
                 Section("Carte liée") {
                     HStack(spacing: 12) {
@@ -175,8 +156,11 @@ struct CreateListingView: View {
                 }
                 .pickerStyle(.segmented)
                 .onChange(of: type) { _, _ in
-                    // ✅ Si l’utilisateur bascule vers encan, on force un endDate valide
                     ensureAuctionEndDateIsValidIfNeeded()
+                    // Petit coup de pouce UX: si encan et champ vide, on suggère 2$
+                    if type == .auction, startingBid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        startingBid = "2"
+                    }
                 }
             }
 
@@ -256,6 +240,10 @@ struct CreateListingView: View {
                     TextField("Mise de départ (CAD)", text: $startingBid)
                         .keyboardType(.decimalPad)
 
+                    Text("Minimum: \(Int(minStartingBidCAD)) $ CAD")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Image(systemName: "clock")
@@ -281,20 +269,15 @@ struct CreateListingView: View {
                     }
                     .padding(.vertical, 4)
 
-                    // ✅ Date + heure + minutes (00/15/30/45)
                     Section {
-                        // Date (jour seulement)
                         DatePicker(
                             "Fin (date)",
                             selection: $endDateOnly,
                             in: Calendar.current.startOfDay(for: minAuctionEndDate)...,
                             displayedComponents: [.date]
                         )
-                        .onChange(of: endDateOnly) { _, _ in
-                            rebuildEndDateFromPickers()
-                        }
+                        .onChange(of: endDateOnly) { _, _ in rebuildEndDateFromPickers() }
 
-                        // Heure + Minutes (quarter)
                         HStack {
                             Text("Heure")
                             Spacer()
@@ -306,9 +289,7 @@ struct CreateListingView: View {
                             .pickerStyle(.wheel)
                             .frame(width: 90, height: 110)
                             .clipped()
-                            .onChange(of: endHour) { _, _ in
-                                rebuildEndDateFromPickers()
-                            }
+                            .onChange(of: endHour) { _, _ in rebuildEndDateFromPickers() }
 
                             Text(":")
                                 .font(.headline)
@@ -322,12 +303,9 @@ struct CreateListingView: View {
                             .pickerStyle(.wheel)
                             .frame(width: 90, height: 110)
                             .clipped()
-                            .onChange(of: endMinuteIndex) { _, _ in
-                                rebuildEndDateFromPickers()
-                            }
+                            .onChange(of: endMinuteIndex) { _, _ in rebuildEndDateFromPickers() }
                         }
 
-                        // Résumé
                         HStack {
                             Text("Fin")
                             Spacer()
@@ -363,25 +341,24 @@ struct CreateListingView: View {
         }
         .navigationTitle(navTitle)
         .onAppear {
-            // ✅ Préremplissage si carte liée
-            if title.isEmpty, let t = linkedCardTitle {
-                title = t
-            }
-            if title.count > maxTitleLength {
-                title = String(title.prefix(maxTitleLength))
-            }
+            if title.isEmpty, let t = linkedCardTitle { title = t }
+            if title.count > maxTitleLength { title = String(title.prefix(maxTitleLength)) }
 
-            // ✅ init picker state à partir de endDate (arrondi au quart d’heure)
             setEndDate(endDate)
-
-            // ✅ clamp si encan
             ensureAuctionEndDateIsValidIfNeeded()
             setEndDate(endDate)
+
+            if type == .auction, startingBid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                startingBid = "2"
+            }
         }
         .onChange(of: type) { _, _ in
             if type == .auction {
                 ensureAuctionEndDateIsValidIfNeeded()
                 setEndDate(endDate)
+                if startingBid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    startingBid = "2"
+                }
             }
         }
     }
@@ -407,12 +384,16 @@ struct CreateListingView: View {
                 return
             }
         } else {
-            guard let start = toDouble(startingBid), start > 0 else {
-                errorText = "Entre une mise de départ valide (ex: 10)."
+            guard let start = toDouble(startingBid) else {
+                errorText = "Entre une mise de départ valide (ex: 2)."
+                return
+            }
+            guard start >= minStartingBidCAD else {
+                errorText = "La mise de départ doit être d’au moins \(Int(minStartingBidCAD)) $ CAD."
+                startingBid = String(Int(minStartingBidCAD))
                 return
             }
 
-            // ✅ Validation UX: minimum 8h
             if endDate < minAuctionEndDate {
                 errorText = "Un encan doit durer au moins 8 heures."
                 setEndDate(minAuctionEndDate)
@@ -432,7 +413,6 @@ struct CreateListingView: View {
         Task {
             do {
                 if let card {
-                    // ✅ FLOW EXISTANT: annonce liée à une carte
                     try await marketplace.createListingFromCollection(
                         from: card,
                         title: finalTitle,
@@ -443,7 +423,6 @@ struct CreateListingView: View {
                         endDate: end
                     )
                 } else {
-                    // ✅ NOUVEAU: annonce libre
                     try await repo.createFreeListing(
                         title: finalTitle,
                         descriptionText: desc,
@@ -477,8 +456,6 @@ struct CreateListingView: View {
         }
     }
 
-    // MARK: - Helpers
-
     private func toDouble(_ s: String) -> Double? {
         let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
         if t.isEmpty { return nil }
@@ -486,7 +463,7 @@ struct CreateListingView: View {
     }
 }
 
-// MARK: - Preview Row
+// MARK: - Preview Row (inchangé)
 
 private struct MarketplaceDraftPreviewRow: View {
     let imageData: Data?
@@ -617,3 +594,4 @@ private extension Array {
         return self[index]
     }
 }
+

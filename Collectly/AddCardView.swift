@@ -13,6 +13,9 @@ struct AddCardView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
 
+    // ✅ IMPORTANT: ownerId obligatoire (Firebase uid)
+    let ownerId: String
+
     // Infos de base
     @State private var title: String = ""
     @State private var notes: String = ""
@@ -34,12 +37,6 @@ struct AddCardView: View {
     @State private var gradeValue: String = ""
     @State private var certificationNumber: String = ""
     private let gradingCompanies = ["PSA", "BGS", "SGC", "CGC", "Autre"]
-
-    // ✅ Acquisition
-    @State private var hasAcquisitionDate: Bool = false
-    @State private var acquisitionDate: Date = Date()
-    @State private var acquisitionSource: String = ""
-    @State private var purchasePriceText: String = ""
 
     // UI
     @State private var isSaving = false
@@ -143,28 +140,6 @@ struct AddCardView: View {
                     }
                 }
 
-                Section("Acquisition") {
-                    Toggle("J’ai une date d’acquisition", isOn: $hasAcquisitionDate)
-
-                    if hasAcquisitionDate {
-                        DatePicker("Date", selection: $acquisitionDate, displayedComponents: .date)
-                    }
-
-                    TextField("Source (eBay, boutique, échange…)", text: $acquisitionSource)
-                        .textInputAutocapitalization(.words)
-                        .autocorrectionDisabled(true)
-
-                    HStack {
-                        TextField("Prix payé (ex: 25.00)", text: $purchasePriceText)
-                            .keyboardType(.decimalPad)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled(true)
-
-                        Text("$ CAD")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
                 if let errorText {
                     Section("Erreur") {
                         Text(errorText)
@@ -187,11 +162,18 @@ struct AddCardView: View {
                 guard let newItem else { return }
                 loadImage(from: newItem)
             }
+            .onAppear {
+                // ✅ sécurité: AddCardView ne devrait jamais être utilisable sans ownerId
+                if ownerId.trimmed.isEmpty {
+                    errorText = "Erreur: utilisateur non connecté."
+                }
+            }
         }
     }
 
     private var canSave: Bool {
         if isSaving { return false }
+        if ownerId.trimmed.isEmpty { return false }
         if title.trimmed.isEmpty { return false }
         return true
     }
@@ -221,9 +203,17 @@ struct AddCardView: View {
 
     private func save() {
         errorText = nil
+
+        guard !ownerId.trimmed.isEmpty else {
+            errorText = "Erreur: utilisateur non connecté."
+            return
+        }
+
         isSaving = true
 
+        // ✅ ownerId requis dans ton modèle
         let newCard = CardItem(
+            ownerId: ownerId.trimmed,
             title: title.trimmed,
             notes: notes.trimmed.isEmpty ? nil : notes.trimmed,
             frontImageData: imageData
@@ -248,12 +238,8 @@ struct AddCardView: View {
             newCard.certificationNumber = nil
         }
 
-        // ✅ Acquisition
-        newCard.acquisitionDate = hasAcquisitionDate ? acquisitionDate : nil
-        newCard.acquisitionSource = acquisitionSource.trimmed.nonEmptyOrNil
-        newCard.purchasePriceCAD = parseMoney(purchasePriceText)
-
         modelContext.insert(newCard)
+
         do {
             try modelContext.save()
             dismiss()
@@ -262,15 +248,9 @@ struct AddCardView: View {
             isSaving = false
         }
     }
-
-    private func parseMoney(_ s: String) -> Double? {
-        let t = s.trimmed
-        if t.isEmpty { return nil }
-        let normalized = t.replacingOccurrences(of: ",", with: ".")
-        guard let v = Double(normalized), v >= 0 else { return nil }
-        return (v * 100).rounded() / 100
-    }
 }
+
+// MARK: - Preview image
 
 private struct CardImagePickerPreview: View {
     let data: Data?
@@ -302,6 +282,8 @@ private struct CardImagePickerPreview: View {
         .frame(height: 240)
     }
 }
+
+// MARK: - String helpers
 
 private extension String {
     var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) }

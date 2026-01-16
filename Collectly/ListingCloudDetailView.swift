@@ -12,10 +12,10 @@ struct ListingCloudDetailView: View {
 
     @EnvironmentObject private var session: SessionStore
 
-    // Input
+    // Input (peut être “stale” / id pas fiable)
     let listing: ListingCloud
 
-    // Live doc listener
+    // Live query listener
     @State private var docListener: ListenerRegistration?
     @State private var current: ListingCloud
 
@@ -37,10 +37,7 @@ struct ListingCloudDetailView: View {
 
     // MARK: - Constants
 
-    /// ⚠️ Ajuste si ta collection Firestore a un autre nom
     private let listingsCollection = "listings"
-
-    /// Incrément minimal (MVP)
     private let minBidIncrement: Double = 1
 
     // MARK: - Computed
@@ -106,9 +103,7 @@ struct ListingCloudDetailView: View {
             VStack(alignment: .leading, spacing: 14) {
 
                 headerImage
-
                 titleBlock
-
                 metaBlock
 
                 if let desc = current.descriptionText,
@@ -427,6 +422,13 @@ struct ListingCloudDetailView: View {
             return
         }
 
+        // ✅ IMPORTANT: on utilise current.id (doc réel)
+        guard !current.id.isEmpty else {
+            toast = Toast(style: .error, title: "Annonce introuvable (id manquant).", systemImage: "exclamationmark.triangle.fill")
+            Haptic.error()
+            return
+        }
+
         isBidding = true
 
         placeBidTransaction(listingId: current.id, uid: uid, amount: amount) { result in
@@ -460,6 +462,13 @@ struct ListingCloudDetailView: View {
             return
         }
 
+        // ✅ IMPORTANT: on utilise current.id (doc réel)
+        guard !current.id.isEmpty else {
+            toast = Toast(style: .error, title: "Annonce introuvable (id manquant).", systemImage: "exclamationmark.triangle.fill")
+            Haptic.error()
+            return
+        }
+
         isBuying = true
         Haptic.light()
 
@@ -478,28 +487,54 @@ struct ListingCloudDetailView: View {
         }
     }
 
-    // MARK: - Firestore listener (live listing)
+    // MARK: - Firestore listener (✅ SAFE: query au lieu de document(id))
 
     private func startDocListener() {
         stopDocListener()
 
-        let ref = Firestore.firestore()
-            .collection(listingsCollection)
-            .document(listing.id)
+        let db = Firestore.firestore()
 
-        docListener = ref.addSnapshotListener { snap, err in
+        let sellerId = listing.sellerId
+        let cardItemId = listing.cardItemId
+
+        // ✅ Query: 0 résultat = pas d’erreur permissions
+        let q = db.collection(listingsCollection)
+            .whereField("sellerId", isEqualTo: sellerId)
+            .whereField("cardItemId", isEqualTo: cardItemId)
+            .limit(to: 25)
+
+        docListener = q.addSnapshotListener { snap, err in
             if let err {
                 DispatchQueue.main.async {
                     self.toast = Toast(style: .error, title: err.localizedDescription, systemImage: "exclamationmark.triangle.fill")
                 }
                 return
             }
-            guard let snap, snap.exists else { return }
 
-            // ✅ IMPORTANT: pas de Codable ici
-            let parsed = ListingCloud.fromFirestore(doc: snap)
-            DispatchQueue.main.async {
-                self.current = parsed
+            guard let snap else { return }
+
+            // 0 doc => annonce disparue / terminée / supprimée / id incorrect
+            if snap.documents.isEmpty {
+                DispatchQueue.main.async {
+                    self.toast = Toast(style: .info, title: "Annonce introuvable ou non accessible.", systemImage: "info.circle", duration: 2.6)
+                }
+                return
+            }
+
+            var items: [ListingCloud] = []
+            items.reserveCapacity(snap.documents.count)
+
+            for doc in snap.documents {
+                items.append(ListingCloud.fromFirestore(doc: doc))
+            }
+
+            // on prend la plus récente (createdAt desc)
+            items.sort { a, b in a.createdAt > b.createdAt }
+
+            if let best = items.first {
+                DispatchQueue.main.async {
+                    self.current = best
+                }
             }
         }
     }

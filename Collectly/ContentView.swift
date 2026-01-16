@@ -9,12 +9,55 @@ import SwiftData
 import UIKit
 import PhotosUI
 
+// ✅ IMPORTANT
+// Ce fichier corrige le problème “tous les users voient la même collection”
+// en filtrant SwiftData par `CardItem.ownerId == uid`.
+//
+// ⚠️ Assure-toi que ton modèle SwiftData CardItem contient bien:
+//     var ownerId: String
+// (ou String? mais idéalement String non-optionnel)
+
 struct ContentView: View {
-    @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var session: SessionStore
 
-    @Query(sort: \CardItem.createdAt, order: .reverse)
-    private var cards: [CardItem]
+    var body: some View {
+        NavigationStack {
+
+            // ✅ Déconnecté -> on cache la collection
+            if session.user == nil {
+                ContentUnavailableView(
+                    "Ma collection",
+                    systemImage: "rectangle.stack",
+                    description: Text("Connecte-toi pour voir ta collection.")
+                )
+                .navigationTitle("")
+                .navigationBarTitleDisplayMode(.inline)
+
+            } else {
+                // ✅ Connecté -> vraie collection filtrée par user
+                MyCollectionInnerView(uid: session.user!.uid)
+            }
+        }
+    }
+}
+
+// MARK: - ✅ Inner view (filtrée par ownerId)
+
+private struct MyCollectionInnerView: View {
+
+    let uid: String
+
+    @Environment(\.modelContext) private var modelContext
+
+    @Query private var cards: [CardItem]
+
+    init(uid: String) {
+        self.uid = uid
+        _cards = Query(
+            filter: #Predicate<CardItem> { $0.ownerId == uid },
+            sort: [SortDescriptor(\CardItem.createdAt, order: .reverse)]
+        )
+    }
 
     // MARK: - Persisted UI state (UserDefaults)
     @AppStorage("collection.searchText") private var storedSearchText: String = ""
@@ -172,327 +215,307 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationStack {
 
-            // ✅ Déconnecté -> on cache la collection
-            if session.user == nil {
+        let _ = favoritesTick // force refresh when favorites change
+        let _ = quantityTick  // force refresh when quantity changes
 
+        let items = filteredSortedAndFilteredCards
+        let totalValue = totalEstimatedValue(of: items)
+        let totalCopies = totalQuantity(of: items)
+
+        let groupedSections: [CollectionSection] = {
+            if groupBy == .none { return [] }
+            return buildSections(from: items, groupBy: groupBy, sectionSort: sectionSort)
+        }()
+
+        let sectionCount = groupedSections.count
+        let allExpanded = groupedAllExpanded(keys: Set(groupedSections.map { $0.key }))
+
+        VStack(spacing: 0) {
+
+            if items.isEmpty {
                 ContentUnavailableView(
                     "Ma collection",
                     systemImage: "rectangle.stack",
-                    description: Text("Connecte-toi pour voir ta collection.")
+                    description: Text(emptyMessage)
                 )
-                .navigationTitle("")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button { showAddSheet = true } label: { Image(systemName: "plus") }
-                            .disabled(true)
-                            .accessibilityLabel("Ajouter une carte")
-                    }
-                }
-
             } else {
 
-                let _ = favoritesTick // force refresh when favorites change
-                let _ = quantityTick  // force refresh when quantity changes
+                CollectionMiniHeader(
+                    count: items.count,
+                    totalCopies: totalCopies,
+                    totalValueCAD: totalValue,
+                    hasActiveFilter: filter != .all,
+                    hasActiveSearch: !searchText.trimmedLocal.isEmpty,
+                    sortLabel: sort.rawValue,
+                    groupLabel: groupBy.rawValue,
+                    isGrouped: groupBy != .none,
+                    sectionSortLabel: sectionSort.rawValue,
+                    sectionCount: sectionCount,
+                    groupAllExpanded: allExpanded,
+                    isFavoritesFilterOn: filter == .favorites,
+                    missingFilterLabel: filter.isMissingFieldFilter ? filter.rawValue : nil,
+                    onToggleAll: { toggleAllSections(keys: Set(groupedSections.map { $0.key })) },
+                    onReset: {
+                        filter = .all
+                        sort = .newest
+                        searchText = ""
+                        groupBy = .none
+                        sectionSort = .valueHigh
+                        Haptics.light()
+                    }
+                )
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                .padding(.bottom, 6)
 
-                let items = filteredSortedAndFilteredCards
-                let totalValue = totalEstimatedValue(of: items)
-                let totalCopies = totalQuantity(of: items)
+                Picker("Affichage", selection: $viewMode) {
+                    ForEach(ViewMode.allCases) { m in
+                        Text(m.rawValue).tag(m)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
 
-                let groupedSections: [CollectionSection] = {
-                    if groupBy == .none { return [] }
-                    return buildSections(from: items, groupBy: groupBy, sectionSort: sectionSort)
-                }()
-
-                let sectionCount = groupedSections.count
-                let allExpanded = groupedAllExpanded(keys: Set(groupedSections.map { $0.key }))
-
-                VStack(spacing: 0) {
-
-                    if items.isEmpty {
-                        ContentUnavailableView(
-                            "Ma collection",
-                            systemImage: "rectangle.stack",
-                            description: Text(emptyMessage)
-                        )
+                // ✅ Contenu (groupé / non groupé)
+                if groupBy == .none {
+                    if viewMode == .grid {
+                        collectionGrid(items)
                     } else {
-
-                        CollectionMiniHeader(
-                            count: items.count,
-                            totalCopies: totalCopies,
-                            totalValueCAD: totalValue,
-                            hasActiveFilter: filter != .all,
-                            hasActiveSearch: !searchText.trimmedLocal.isEmpty,
-                            sortLabel: sort.rawValue,
-                            groupLabel: groupBy.rawValue,
-                            isGrouped: groupBy != .none,
-                            sectionSortLabel: sectionSort.rawValue,
-                            sectionCount: sectionCount,
-                            groupAllExpanded: allExpanded,
-                            isFavoritesFilterOn: filter == .favorites,
-                            missingFilterLabel: filter.isMissingFieldFilter ? filter.rawValue : nil,
-                            onToggleAll: { toggleAllSections(keys: Set(groupedSections.map { $0.key })) },
-                            onReset: {
-                                filter = .all
-                                sort = .newest
-                                searchText = ""
-                                groupBy = .none
-                                sectionSort = .valueHigh
-                                Haptics.light()
-                            }
-                        )
-                        .padding(.horizontal, 12)
-                        .padding(.top, 8)
-                        .padding(.bottom, 6)
-
-                        Picker("Affichage", selection: $viewMode) {
-                            ForEach(ViewMode.allCases) { m in
-                                Text(m.rawValue).tag(m)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .padding(.horizontal, 12)
-                        .padding(.bottom, 8)
-
-                        // ✅ Contenu (groupé / non groupé)
-                        if groupBy == .none {
-                            if viewMode == .grid {
-                                collectionGrid(items)
-                            } else {
-                                collectionList(items)
-                            }
-                        } else {
-                            if viewMode == .grid {
-                                groupedGrid(groupedSections)
-                            } else {
-                                groupedList(groupedSections)
-                            }
-                        }
+                        collectionList(items)
                     }
-
-                    // ✅ Barre multi-sélection
-                    if isSelectionMode {
-                        CollectionSelectionToolbar(
-                            selectedCount: selectedIds.count,
-                            onMerge: { beginMergeFlow(in: items) },
-                            onIncrementQty: { incrementSelectedQuantity(in: items) },
-                            onDecrementQty: { decrementSelectedQuantity(in: items) },
-                            onFavorite: { favoriteSelected(in: items) },
-                            onUnfavorite: { unfavoriteSelected(in: items) },
-                            onDelete: { confirmDeleteSelected(in: items) },
-                            onCancel: { exitSelectionMode() }
-                        )
+                } else {
+                    if viewMode == .grid {
+                        groupedGrid(groupedSections)
+                    } else {
+                        groupedList(groupedSections)
                     }
-                }
-                .navigationTitle("")
-                .navigationBarTitleDisplayMode(.inline)
-                .searchable(text: $searchText, prompt: "Rechercher une carte…")
-                .toolbar {
-
-                    // ✅ Multi-select toggle + Tout sélectionner
-                    ToolbarItem(placement: .topBarLeading) {
-                        if isSelectionMode {
-                            Menu {
-                                Button {
-                                    selectAllVisible(items)
-                                } label: {
-                                    Label("Tout sélectionner", systemImage: "checkmark.circle")
-                                }
-
-                                Button {
-                                    clearSelection()
-                                } label: {
-                                    Label("Tout désélectionner", systemImage: "circle")
-                                }
-
-                                Divider()
-
-                                Button(role: .destructive) {
-                                    exitSelectionMode()
-                                } label: {
-                                    Label("Terminer la sélection", systemImage: "xmark.circle")
-                                }
-                            } label: {
-                                Label("Tout", systemImage: "checkmark.circle")
-                            }
-                            .accessibilityLabel("Actions de sélection")
-                        } else {
-                            Button("Sélectionner") {
-                                enterSelectionMode()
-                            }
-                            .accessibilityLabel("Activer la sélection")
-                        }
-                    }
-
-                    // ✅ Filtrer / Trier / Regrouper masqués en sélection (plus clair)
-                    if !isSelectionMode {
-                        ToolbarItem(placement: .topBarLeading) {
-                            Menu {
-
-                                // ✅ 1) Base
-                                Section("Filtrer") {
-                                    Picker("Filtrer", selection: $filter) {
-                                        Label(FilterOption.all.rawValue, systemImage: FilterOption.all.systemImage).tag(FilterOption.all)
-                                        Label(FilterOption.favorites.rawValue, systemImage: FilterOption.favorites.systemImage).tag(FilterOption.favorites)
-                                        Label(FilterOption.withValue.rawValue, systemImage: FilterOption.withValue.systemImage).tag(FilterOption.withValue)
-                                        Label(FilterOption.withoutValue.rawValue, systemImage: FilterOption.withoutValue.systemImage).tag(FilterOption.withoutValue)
-                                        Label(FilterOption.withNotes.rawValue, systemImage: FilterOption.withNotes.systemImage).tag(FilterOption.withNotes)
-                                        Label(FilterOption.withoutNotes.rawValue, systemImage: FilterOption.withoutNotes.systemImage).tag(FilterOption.withoutNotes)
-                                    }
-                                }
-
-                                Divider()
-
-                                // ✅ 2) Champs manquants
-                                Section("Champs manquants") {
-                                    Button { filter = .missingPhoto } label: {
-                                        Label(FilterOption.missingPhoto.rawValue, systemImage: FilterOption.missingPhoto.systemImage)
-                                    }
-                                    Button { filter = .missingYear } label: {
-                                        Label(FilterOption.missingYear.rawValue, systemImage: FilterOption.missingYear.systemImage)
-                                    }
-                                    Button { filter = .missingSet } label: {
-                                        Label(FilterOption.missingSet.rawValue, systemImage: FilterOption.missingSet.systemImage)
-                                    }
-                                    Button { filter = .missingPlayer } label: {
-                                        Label(FilterOption.missingPlayer.rawValue, systemImage: FilterOption.missingPlayer.systemImage)
-                                    }
-                                    Button { filter = .missingGrading } label: {
-                                        Label(FilterOption.missingGrading.rawValue, systemImage: FilterOption.missingGrading.systemImage)
-                                    }
-                                }
-
-                                if filter != .all {
-                                    Divider()
-                                    Button(role: .destructive) {
-                                        filter = .all
-                                    } label: {
-                                        Label("Réinitialiser les filtres", systemImage: "xmark.circle")
-                                    }
-                                }
-
-                            } label: {
-                                Image(systemName: filter == .all
-                                      ? "line.3.horizontal.decrease.circle"
-                                      : "line.3.horizontal.decrease.circle.fill")
-                            }
-                            .accessibilityLabel("Filtrer")
-                        }
-
-                        ToolbarItem(placement: .topBarLeading) {
-                            Menu {
-                                Picker("Trier", selection: $sort) {
-                                    ForEach(SortOption.allCases) { opt in
-                                        Label(opt.rawValue, systemImage: opt.systemImage).tag(opt)
-                                    }
-                                }
-                            } label: {
-                                Image(systemName: "arrow.up.arrow.down")
-                            }
-                            .accessibilityLabel("Trier")
-                        }
-
-                        ToolbarItem(placement: .topBarLeading) {
-                            Menu {
-                                Picker("Regrouper par", selection: $groupBy) {
-                                    ForEach(GroupByOption.allCases) { opt in
-                                        Label(opt.rawValue, systemImage: opt.systemImage).tag(opt)
-                                    }
-                                }
-
-                                if groupBy != .none {
-                                    Divider()
-                                    Picker("Trier les sections", selection: $sectionSort) {
-                                        ForEach(SectionSortOption.allCases) { opt in
-                                            Label(opt.rawValue, systemImage: opt.systemImage).tag(opt)
-                                        }
-                                    }
-                                }
-
-                                if groupBy != .none {
-                                    Divider()
-                                    Button { groupBy = .none } label: {
-                                        Label("Désactiver le regroupement", systemImage: "xmark.circle")
-                                    }
-                                }
-                            } label: {
-                                Image(systemName: groupBy == .none ? "square.grid.2x2" : "square.grid.2x2.fill")
-                            }
-                            .accessibilityLabel("Regrouper")
-                        }
-                    }
-
-                    // ✅ Ajouter (désactivé en sélection)
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button { showAddSheet = true } label: { Image(systemName: "plus") }
-                            .accessibilityLabel("Ajouter une carte")
-                            .disabled(isSelectionMode)
-                    }
-                }
-                .onChange(of: groupBy) { _, _ in
-                    persistUIState()
-                    rebuildExpandedKeys()
-                }
-                .onChange(of: sectionSort) { _, _ in persistUIState() }
-                .onChange(of: searchText) { _, _ in
-                    persistUIState()
-                    if groupBy != .none { rebuildExpandedKeys() }
-                    if isSelectionMode { pruneSelection(visibleItems: filteredSortedAndFilteredCards) }
-                }
-                .onChange(of: viewMode) { _, _ in persistUIState() }
-                .onChange(of: sort) { _, _ in
-                    persistUIState()
-                    if isSelectionMode { pruneSelection(visibleItems: filteredSortedAndFilteredCards) }
-                }
-                .onChange(of: filter) { _, _ in
-                    persistUIState()
-                    if isSelectionMode { pruneSelection(visibleItems: filteredSortedAndFilteredCards) }
-                }
-                .sheet(isPresented: $showAddSheet) { AddCardView() }
-                .sheet(item: $quickEditCard) { card in
-                    CardQuickEditView(card: card)
-                        .onDisappear {
-                            favoritesTick += 1
-                            quantityTick += 1
-                        }
-                }
-                .alert("Erreur", isPresented: Binding(
-                    get: { uiErrorText != nil },
-                    set: { if !$0 { uiErrorText = nil } }
-                )) {
-                    Button("OK", role: .cancel) {}
-                } message: {
-                    Text(uiErrorText ?? "")
-                }
-
-                // ✅ CONFIRMATION SUPPRESSION (single + batch) — texte amélioré
-                .alert(deleteAlertTitle, isPresented: $showDeleteConfirm) {
-                    Button("Annuler", role: .cancel) { pendingDeleteItems = [] }
-                    Button("Supprimer", role: .destructive) {
-                        let toDelete = pendingDeleteItems
-                        pendingDeleteItems = []
-                        deleteItemsNow(toDelete)
-                    }
-                } message: {
-                    Text(deleteAlertMessage)
-                }
-
-                .alert("Fusionner", isPresented: $showMergeConfirm) {
-                    Button("Annuler", role: .cancel) { pendingMergeItems = [] }
-                    Button("Fusionner", role: .destructive) {
-                        let toMerge = pendingMergeItems
-                        pendingMergeItems = []
-                        mergeItemsNow(toMerge)
-                    }
-                } message: {
-                    let count = pendingMergeItems.count
-                    Text(count <= 1
-                         ? "Sélectionne au moins 2 cartes à fusionner."
-                         : "Fusionner \(count) cartes en une seule? Les autres seront supprimées (quantités additionnées).")
                 }
             }
+
+            // ✅ Barre multi-sélection
+            if isSelectionMode {
+                CollectionSelectionToolbar(
+                    selectedCount: selectedIds.count,
+                    onMerge: { beginMergeFlow(in: items) },
+                    onIncrementQty: { incrementSelectedQuantity(in: items) },
+                    onDecrementQty: { decrementSelectedQuantity(in: items) },
+                    onFavorite: { favoriteSelected(in: items) },
+                    onUnfavorite: { unfavoriteSelected(in: items) },
+                    onDelete: { confirmDeleteSelected(in: items) },
+                    onCancel: { exitSelectionMode() }
+                )
+            }
+        }
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchText, prompt: "Rechercher une carte…")
+        .toolbar {
+
+            // ✅ Multi-select toggle + Tout sélectionner
+            ToolbarItem(placement: .topBarLeading) {
+                if isSelectionMode {
+                    Menu {
+                        Button {
+                            selectAllVisible(items)
+                        } label: {
+                            Label("Tout sélectionner", systemImage: "checkmark.circle")
+                        }
+
+                        Button {
+                            clearSelection()
+                        } label: {
+                            Label("Tout désélectionner", systemImage: "circle")
+                        }
+
+                        Divider()
+
+                        Button(role: .destructive) {
+                            exitSelectionMode()
+                        } label: {
+                            Label("Terminer la sélection", systemImage: "xmark.circle")
+                        }
+                    } label: {
+                        Label("Tout", systemImage: "checkmark.circle")
+                    }
+                    .accessibilityLabel("Actions de sélection")
+                } else {
+                    Button("Sélectionner") {
+                        enterSelectionMode()
+                    }
+                    .accessibilityLabel("Activer la sélection")
+                }
+            }
+
+            // ✅ Filtrer / Trier / Regrouper masqués en sélection (plus clair)
+            if !isSelectionMode {
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+
+                        // ✅ 1) Base
+                        Section("Filtrer") {
+                            Picker("Filtrer", selection: $filter) {
+                                Label(FilterOption.all.rawValue, systemImage: FilterOption.all.systemImage).tag(FilterOption.all)
+                                Label(FilterOption.favorites.rawValue, systemImage: FilterOption.favorites.systemImage).tag(FilterOption.favorites)
+                                Label(FilterOption.withValue.rawValue, systemImage: FilterOption.withValue.systemImage).tag(FilterOption.withValue)
+                                Label(FilterOption.withoutValue.rawValue, systemImage: FilterOption.withoutValue.systemImage).tag(FilterOption.withoutValue)
+                                Label(FilterOption.withNotes.rawValue, systemImage: FilterOption.withNotes.systemImage).tag(FilterOption.withNotes)
+                                Label(FilterOption.withoutNotes.rawValue, systemImage: FilterOption.withoutNotes.systemImage).tag(FilterOption.withoutNotes)
+                            }
+                        }
+
+                        Divider()
+
+                        // ✅ 2) Champs manquants
+                        Section("Champs manquants") {
+                            Button { filter = .missingPhoto } label: {
+                                Label(FilterOption.missingPhoto.rawValue, systemImage: FilterOption.missingPhoto.systemImage)
+                            }
+                            Button { filter = .missingYear } label: {
+                                Label(FilterOption.missingYear.rawValue, systemImage: FilterOption.missingYear.systemImage)
+                            }
+                            Button { filter = .missingSet } label: {
+                                Label(FilterOption.missingSet.rawValue, systemImage: FilterOption.missingSet.systemImage)
+                            }
+                            Button { filter = .missingPlayer } label: {
+                                Label(FilterOption.missingPlayer.rawValue, systemImage: FilterOption.missingPlayer.systemImage)
+                            }
+                            Button { filter = .missingGrading } label: {
+                                Label(FilterOption.missingGrading.rawValue, systemImage: FilterOption.missingGrading.systemImage)
+                            }
+                        }
+
+                        if filter != .all {
+                            Divider()
+                            Button(role: .destructive) {
+                                filter = .all
+                            } label: {
+                                Label("Réinitialiser les filtres", systemImage: "xmark.circle")
+                            }
+                        }
+
+                    } label: {
+                        Image(systemName: filter == .all
+                              ? "line.3.horizontal.decrease.circle"
+                              : "line.3.horizontal.decrease.circle.fill")
+                    }
+                    .accessibilityLabel("Filtrer")
+                }
+
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+                        Picker("Trier", selection: $sort) {
+                            ForEach(SortOption.allCases) { opt in
+                                Label(opt.rawValue, systemImage: opt.systemImage).tag(opt)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down")
+                    }
+                    .accessibilityLabel("Trier")
+                }
+
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+                        Picker("Regrouper par", selection: $groupBy) {
+                            ForEach(GroupByOption.allCases) { opt in
+                                Label(opt.rawValue, systemImage: opt.systemImage).tag(opt)
+                            }
+                        }
+
+                        if groupBy != .none {
+                            Divider()
+                            Picker("Trier les sections", selection: $sectionSort) {
+                                ForEach(SectionSortOption.allCases) { opt in
+                                    Label(opt.rawValue, systemImage: opt.systemImage).tag(opt)
+                                }
+                            }
+                        }
+
+                        if groupBy != .none {
+                            Divider()
+                            Button { groupBy = .none } label: {
+                                Label("Désactiver le regroupement", systemImage: "xmark.circle")
+                            }
+                        }
+                    } label: {
+                        Image(systemName: groupBy == .none ? "square.grid.2x2" : "square.grid.2x2.fill")
+                    }
+                    .accessibilityLabel("Regrouper")
+                }
+            }
+
+            // ✅ Ajouter (désactivé en sélection)
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showAddSheet = true } label: { Image(systemName: "plus") }
+                    .accessibilityLabel("Ajouter une carte")
+                    .disabled(isSelectionMode)
+            }
+        }
+        .onChange(of: groupBy) { _, _ in
+            persistUIState()
+            rebuildExpandedKeys()
+        }
+        .onChange(of: sectionSort) { _, _ in persistUIState() }
+        .onChange(of: searchText) { _, _ in
+            persistUIState()
+            if groupBy != .none { rebuildExpandedKeys() }
+            if isSelectionMode { pruneSelection(visibleItems: filteredSortedAndFilteredCards) }
+        }
+        .onChange(of: viewMode) { _, _ in persistUIState() }
+        .onChange(of: sort) { _, _ in
+            persistUIState()
+            if isSelectionMode { pruneSelection(visibleItems: filteredSortedAndFilteredCards) }
+        }
+        .onChange(of: filter) { _, _ in
+            persistUIState()
+            if isSelectionMode { pruneSelection(visibleItems: filteredSortedAndFilteredCards) }
+        }
+        .sheet(isPresented: $showAddSheet) {
+            // ✅ IMPORTANT: ton AddCardView doit sauver ownerId = uid
+            AddCardView()
+        }
+        .sheet(item: $quickEditCard) { card in
+            CardQuickEditView(card: card)
+                .onDisappear {
+                    favoritesTick += 1
+                    quantityTick += 1
+                }
+        }
+        .alert("Erreur", isPresented: Binding(
+            get: { uiErrorText != nil },
+            set: { if !$0 { uiErrorText = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(uiErrorText ?? "")
+        }
+
+        // ✅ CONFIRMATION SUPPRESSION (single + batch)
+        .alert(deleteAlertTitle, isPresented: $showDeleteConfirm) {
+            Button("Annuler", role: .cancel) { pendingDeleteItems = [] }
+            Button("Supprimer", role: .destructive) {
+                let toDelete = pendingDeleteItems
+                pendingDeleteItems = []
+                deleteItemsNow(toDelete)
+            }
+        } message: {
+            Text(deleteAlertMessage)
+        }
+
+        .alert("Fusionner", isPresented: $showMergeConfirm) {
+            Button("Annuler", role: .cancel) { pendingMergeItems = [] }
+            Button("Fusionner", role: .destructive) {
+                let toMerge = pendingMergeItems
+                pendingMergeItems = []
+                mergeItemsNow(toMerge)
+            }
+        } message: {
+            let count = pendingMergeItems.count
+            Text(count <= 1
+                 ? "Sélectionne au moins 2 cartes à fusionner."
+                 : "Fusionner \(count) cartes en une seule? Les autres seront supprimées (quantités additionnées).")
         }
         .onAppear {
             restoreUIState()
@@ -838,7 +861,6 @@ struct ContentView: View {
             ) {
                 ForEach(items) { card in
                     if isSelectionMode {
-                        // ✅ En sélection: tap = toggle sélection (pas de NavigationLink)
                         Button {
                             toggleSelected(card)
                         } label: {
@@ -1236,7 +1258,7 @@ struct ContentView: View {
         sections.sort { a, b in
             let aSans = a.key.lowercased().hasPrefix("sans ")
             let bSans = b.key.lowercased().hasPrefix("sans ")
-            if aSans != bSans { return bSans }
+            if aSans != bSans { return bSans == false }
 
             switch sectionSort {
             case .valueHigh:
@@ -1255,7 +1277,7 @@ struct ContentView: View {
     private func sortSectionKey(_ a: String, _ b: String, groupBy: GroupByOption) -> Bool {
         let aSans = a.lowercased().hasPrefix("sans ")
         let bSans = b.lowercased().hasPrefix("sans ")
-        if aSans != bSans { return bSans }
+        if aSans != bSans { return bSans == false }
 
         switch groupBy {
         case .year:
@@ -1530,7 +1552,7 @@ private struct CollectionMiniHeader: View {
                 if hasActiveFilter { Chip(text: "Filtré", systemImage: "line.3.horizontal.decrease.circle.fill") }
                 if hasActiveSearch { Chip(text: "Recherche", systemImage: "magnifyingglass") }
 
-                if hasActiveFilter || hasActiveSearch || isGrouped || isFavoritesFilterOn || sortLabel != ContentView.SortOption.newest.rawValue {
+                if hasActiveFilter || hasActiveSearch || isGrouped || isFavoritesFilterOn || sortLabel != MyCollectionInnerView.SortOption.newest.rawValue {
                     Button { onReset() } label: { Image(systemName: "arrow.counterclockwise") }
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
@@ -1664,9 +1686,8 @@ private struct CollectionGridCard: View {
         VStack(alignment: .leading, spacing: 8) {
 
             SlabLocalThumb(data: card.frontImageData, height: 200)
-                .overlay(alignment: .topTrailing) {
+                .overlay(alignment: .topLeading) {
                     HStack(spacing: 6) {
-
                         if selectionMode {
                             Button { onToggleSelection() } label: {
                                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
@@ -1680,17 +1701,22 @@ private struct CollectionGridCard: View {
                             Button { onToggleFavorite() } label: {
                                 Image(systemName: isFavorite ? "star.fill" : "star")
                                     .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(isFavorite ? Color.yellow : Color.secondary)
                                     .padding(8)
                                     .background(Circle().fill(Color(.systemBackground).opacity(0.9)))
                                     .overlay(Circle().stroke(Color.black.opacity(0.10), lineWidth: 1))
                             }
                             .buttonStyle(.plain)
                         }
-
+                    }
+                    .padding(.leading, 6)
+                    .padding(.top, 6)
+                }
+                .overlay(alignment: .topTrailing) {
+                    HStack(spacing: 6) {
                         if quantity > 1 {
                             QuantityPill(text: "x\(quantity)")
                         }
-
                         if let label = card.gradingLabel {
                             GradingOverlayBadge(label: label, compact: false)
                         }
@@ -1724,7 +1750,6 @@ private struct CollectionGridCard: View {
                 .fill(Color(.secondarySystemGroupedBackground))
         )
         .contentShape(Rectangle())
-        // ✅ Important: pas de onTapGesture ici (sinon ça bloque l’ouverture du NavigationLink)
     }
 
     private struct QuantityPill: View {
@@ -1823,7 +1848,6 @@ private struct CollectionListRow: View {
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
-        // ✅ Important: pas de onTapGesture ici (sinon ça bloque l’ouverture du NavigationLink)
     }
 }
 

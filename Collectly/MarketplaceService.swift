@@ -29,7 +29,7 @@ enum MarketplaceError: LocalizedError {
     // ✅ Encans: minimum (8 heures)
     case auctionDurationTooShort
 
-    // ✅ Prix fixe invalide (utile pour rules create)
+    // ✅ Prix fixe invalide
     case invalidFixedPrice
 
     var errorDescription: String? {
@@ -122,16 +122,14 @@ final class MarketplaceService {
         }
     }
 
-    // MARK: - BUY NOW (✅ écrit buyerId/buyerUsername/finalPrice/soldAt)
+    // MARK: - BUY NOW (server time)
 
     func buyNow(listingId: String) async throws {
         guard let user = Auth.auth().currentUser else { throw MarketplaceError.notSignedIn }
 
-        // ✅ username fiable (users/{uid}.username)
         let buyerUsername = try await fetchUsernameOrThrow(uid: user.uid)
 
         let ref = db.collection("listings").document(listingId)
-        let now = Timestamp(date: Date())
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             db.runTransaction({ transaction, errorPointer in
@@ -178,14 +176,13 @@ final class MarketplaceService {
 
                     let price = (data["buyNowPriceCAD"] as? Double) ?? 0
 
-                    // ✅ Écriture "réelle"
                     transaction.updateData([
                         "status": "sold",
                         "buyerId": user.uid,
                         "buyerUsername": buyerUsername,
                         "finalPriceCAD": price,
-                        "soldAt": now,
-                        "updatedAt": now
+                        "soldAt": FieldValue.serverTimestamp(),
+                        "updatedAt": FieldValue.serverTimestamp()
                     ], forDocument: ref)
 
                     return true
@@ -194,26 +191,21 @@ final class MarketplaceService {
                     return nil
                 }
             }, completion: { _, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: ())
-                }
+                if let error { continuation.resume(throwing: error) }
+                else { continuation.resume(returning: ()) }
             })
         }
     }
 
-    // MARK: - PLACE BID (✅ username fiable, pas displayName)
+    // MARK: - PLACE BID (server time)
 
     func placeBid(listingId: String, bidCAD: Double) async throws {
         guard let user = Auth.auth().currentUser else { throw MarketplaceError.notSignedIn }
         guard bidCAD > 0 else { throw MarketplaceError.bidTooLow }
 
-        // ✅ username fiable (users/{uid}.username)
         let bidderUsername = try await fetchUsernameOrThrow(uid: user.uid)
 
         let ref = db.collection("listings").document(listingId)
-        let now = Timestamp(date: Date())
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             db.runTransaction({ transaction, errorPointer in
@@ -288,7 +280,7 @@ final class MarketplaceService {
                         "bidCount": newBidCount,
                         "lastBidderId": user.uid,
                         "lastBidderUsername": bidderUsername,
-                        "updatedAt": now
+                        "updatedAt": FieldValue.serverTimestamp()
                     ], forDocument: ref)
 
                     return true
@@ -297,16 +289,13 @@ final class MarketplaceService {
                     return nil
                 }
             }, completion: { _, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: ())
-                }
+                if let error { continuation.resume(throwing: error) }
+                else { continuation.resume(returning: ()) }
             })
         }
     }
 
-    // MARK: - UPDATE FIXED PRICE (optionnel, gardé)
+    // MARK: - UPDATE FIXED PRICE (optionnel)
 
     func updateFixedPriceListing(
         listingId: String,
@@ -329,11 +318,10 @@ final class MarketplaceService {
         let cleanTitle = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanDesc = newDescription?.trimmingCharacters(in: .whitespacesAndNewlines)
         let desc: String? = (cleanDesc?.isEmpty == true) ? nil : cleanDesc
-        let now = Timestamp(date: Date())
 
         var updates: [String: Any] = [
             "title": cleanTitle,
-            "updatedAt": now
+            "updatedAt": FieldValue.serverTimestamp()
         ]
 
         if let desc {
@@ -351,7 +339,7 @@ final class MarketplaceService {
         try await docRef.updateData(updates)
     }
 
-    // MARK: - END LISTING (manual) ✅ endedAt
+    // MARK: - END LISTING (manual)
 
     func endListing(listingId: String) async throws {
         guard let user = Auth.auth().currentUser else { throw MarketplaceError.notSignedIn }
@@ -362,12 +350,10 @@ final class MarketplaceService {
         guard snap.exists, let data = snap.data() else { throw MarketplaceError.notOwner }
         guard (data["sellerId"] as? String) == user.uid else { throw MarketplaceError.notOwner }
 
-        let now = Timestamp(date: Date())
-
         try await ref.updateData([
             "status": "ended",
-            "endedAt": now,
-            "updatedAt": now
+            "endedAt": FieldValue.serverTimestamp(),
+            "updatedAt": FieldValue.serverTimestamp()
         ])
     }
 
@@ -385,7 +371,6 @@ final class MarketplaceService {
             guard !snap.documents.isEmpty else { return }
 
             let batch = db.batch()
-            let now = Timestamp(date: Date())
 
             for doc in snap.documents {
                 let data = doc.data()
@@ -398,8 +383,8 @@ final class MarketplaceService {
                     if status == "active" || status == "paused" {
                         batch.updateData([
                             "status": "ended",
-                            "endedAt": now,
-                            "updatedAt": now
+                            "endedAt": FieldValue.serverTimestamp(),
+                            "updatedAt": FieldValue.serverTimestamp()
                         ], forDocument: doc.reference)
                     }
                 }
@@ -410,8 +395,8 @@ final class MarketplaceService {
                         if bidCount == 0 {
                             batch.updateData([
                                 "status": "ended",
-                                "endedAt": now,
-                                "updatedAt": now
+                                "endedAt": FieldValue.serverTimestamp(),
+                                "updatedAt": FieldValue.serverTimestamp()
                             ], forDocument: doc.reference)
                         }
                     }
@@ -444,7 +429,6 @@ final class MarketplaceService {
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanDesc = description?.trimmingCharacters(in: .whitespacesAndNewlines)
         let desc: String? = (cleanDesc?.isEmpty == true) ? nil : cleanDesc
-        let now = Timestamp(date: Date())
 
         let existing = try await docRef.getDocument()
 
@@ -460,7 +444,7 @@ final class MarketplaceService {
 
             var updates: [String: Any] = [
                 "title": cleanTitle,
-                "updatedAt": now,
+                "updatedAt": FieldValue.serverTimestamp(),
                 "sellerUsername": sellerUsername,
                 "status": nextStatus
             ]
@@ -484,21 +468,21 @@ final class MarketplaceService {
             if let imageUrl = try await uploadListingImageIfNeeded(card: card, listingId: listingId, uid: user.uid) {
                 try await docRef.updateData([
                     "imageUrl": imageUrl,
-                    "updatedAt": now
+                    "updatedAt": FieldValue.serverTimestamp()
                 ])
             }
 
             return
         }
 
-        // ✅ Création initiale (rules CREATE exige buyNowPriceCAD > 0)
+        // ✅ Création initiale
         guard let price = buyNowPriceCAD, price > 0 else {
             throw MarketplaceError.invalidFixedPrice
         }
 
         var payload: [String: Any] = [
-            "createdAt": now,
-            "updatedAt": now,
+            "createdAt": FieldValue.serverTimestamp(),
+            "updatedAt": FieldValue.serverTimestamp(),
             "sellerId": user.uid,
             "sellerUsername": sellerUsername,
             "cardItemId": card.id.uuidString,
@@ -518,7 +502,7 @@ final class MarketplaceService {
         if let imageUrl = try await uploadListingImageIfNeeded(card: card, listingId: listingId, uid: user.uid) {
             try await docRef.updateData([
                 "imageUrl": imageUrl,
-                "updatedAt": now
+                "updatedAt": FieldValue.serverTimestamp()
             ])
         }
     }
@@ -544,13 +528,12 @@ final class MarketplaceService {
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanDesc = description?.trimmingCharacters(in: .whitespacesAndNewlines)
         let desc: String? = (cleanDesc?.isEmpty == true) ? nil : cleanDesc
-        let now = Timestamp(date: Date())
 
         let typeString: String = (type == .auction) ? "auction" : "fixedPrice"
 
         var payload: [String: Any] = [
-            "createdAt": now,
-            "updatedAt": now,
+            "createdAt": FieldValue.serverTimestamp(),
+            "updatedAt": FieldValue.serverTimestamp(),
             "sellerId": user.uid,
             "sellerUsername": sellerUsername,
             "cardItemId": card.id.uuidString,
@@ -574,7 +557,6 @@ final class MarketplaceService {
             }
 
             let start = startingBidCAD ?? 0
-
             payload["startingBidCAD"] = start
             payload["currentBidCAD"] = start
             payload["endDate"] = Timestamp(date: endDate)
@@ -587,7 +569,7 @@ final class MarketplaceService {
         if let imageUrl = try await uploadListingImageIfNeeded(card: card, listingId: listingId, uid: user.uid) {
             try await docRef.updateData([
                 "imageUrl": imageUrl,
-                "updatedAt": now
+                "updatedAt": FieldValue.serverTimestamp()
             ])
         }
     }
@@ -625,7 +607,6 @@ final class MarketplaceService {
 
     // MARK: - Username helpers
 
-    /// ✅ Username de l’app (users/{uid}.username) — fiable et conforme à tes rules
     private func fetchUsernameOrThrow(uid: String) async throws -> String {
         let doc = try await db.collection("users").document(uid).getDocument()
         let data = doc.data() ?? [:]
@@ -659,4 +640,3 @@ final class MarketplaceService {
         return url.absoluteString
     }
 }
-

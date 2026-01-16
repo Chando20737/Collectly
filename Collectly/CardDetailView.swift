@@ -11,7 +11,7 @@ import FirebaseAuth
 import FirebaseFirestore
 
 struct CardDetailView: View {
-    let card: CardItem
+    @Bindable var card: CardItem
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -242,6 +242,10 @@ struct CardDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                Button("Modifier") { showEditSheet = true }
+                    .disabled(isWorking || isUpdatingStatus)
+            }
+            ToolbarItem(placement: .topBarLeading) {
                 Button("Fermer") { dismiss() }
                     .disabled(isWorking || isUpdatingStatus)
             }
@@ -300,7 +304,6 @@ struct CardDetailView: View {
     // MARK: - French pluralization
 
     private func miseText(_ count: Int) -> String {
-        // selon ta règle: 0 et 1 = singulier
         return count <= 1 ? "\(count) mise" : "\(count) mises"
     }
 
@@ -332,8 +335,8 @@ struct CardDetailView: View {
         }
 
         let rounded = (v * 100).rounded() / 100
-
         card.estimatedPriceCAD = rounded
+
         do {
             try modelContext.save()
             isSavingPrice = false
@@ -386,7 +389,6 @@ struct CardDetailView: View {
             .addSnapshotListener { snap, error in
 
                 if let ns = error as NSError? {
-                    // Permission denied => on évite de spammer l’UI
                     if ns.domain == "FIRFirestoreErrorDomain" && ns.code == 7 {
                         self.listingError = nil
                         self.listing = nil
@@ -413,7 +415,6 @@ struct CardDetailView: View {
                     return
                 }
 
-                // Choisir le doc le plus récent selon createdAt
                 let best = snap.documents.max { a, b in
                     let ta = (a.data()["createdAt"] as? Timestamp)?.dateValue() ?? .distantPast
                     let tb = (b.data()["createdAt"] as? Timestamp)?.dateValue() ?? .distantPast
@@ -472,7 +473,6 @@ struct CardDetailView: View {
                 return
             }
 
-            // ✅ Valide min 8h côté app aussi (petit buffer)
             let minAuctionSeconds: TimeInterval = (8 * 60 * 60) + 120
             let minEnd = Date().addingTimeInterval(minAuctionSeconds)
             if end < minEnd {
@@ -531,6 +531,7 @@ struct CardDetailView: View {
         }
     }
 
+    // ✅ FIX: Une seule fonction (plus de redeclaration)
     private func deleteCardLocallyAndEndListingIfNeeded() async {
         uiErrorText = nil
         isWorking = true
@@ -546,6 +547,316 @@ struct CardDetailView: View {
             } catch {
                 uiErrorText = error.localizedDescription
             }
+        }
+    }
+}
+
+// MARK: - ✅ Sheet: vendre / modifier la vente
+
+private struct CardDetailSellCardSheetView: View {
+    let card: CardItem
+    let existing: CardDetailListingMini?
+    let onSubmit: (_ title: String, _ description: String?, _ type: ListingType, _ buyNow: Double?, _ startBid: Double?, _ endDate: Date?) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    private enum SellType: String, CaseIterable, Identifiable {
+        case fixedPrice
+        case auction
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .fixedPrice: return "Prix fixe"
+            case .auction: return "Encan"
+            }
+        }
+    }
+
+    @State private var title: String = ""
+    @State private var descriptionText: String = ""
+
+    @State private var sellType: SellType = .fixedPrice
+
+    @State private var buyNowText: String = ""
+    @State private var startBidText: String = ""
+    @State private var endDate: Date = Date().addingTimeInterval((8 * 60 * 60) + 180)
+
+    @State private var uiError: String? = nil
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Annonce") {
+                    TextField("Titre", text: $title)
+                        .textInputAutocapitalization(.sentences)
+
+                    TextField("Description (optionnel)", text: $descriptionText, axis: .vertical)
+                        .lineLimit(3...6)
+                }
+
+                Section("Type") {
+                    Picker("Type", selection: $sellType) {
+                        ForEach(SellType.allCases) { t in
+                            Text(t.label).tag(t)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                if sellType == .fixedPrice {
+                    Section("Prix fixe") {
+                        TextField("Prix (ex: 25.00)", text: $buyNowText)
+                            .keyboardType(.decimalPad)
+                        Text("$ CAD")
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Section("Encan") {
+                        TextField("Mise de départ (ex: 0.00)", text: $startBidText)
+                            .keyboardType(.decimalPad)
+                        DatePicker("Fin", selection: $endDate, displayedComponents: [.date, .hourAndMinute])
+                    }
+                }
+
+                if let uiError, !uiError.isEmpty {
+                    Section {
+                        Text("⚠️ \(uiError)")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle(existing == nil ? "Mettre en vente" : "Modifier la vente")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Annuler") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Enregistrer") { submit() }
+                }
+            }
+            .onAppear {
+                title = card.title
+
+                if let existing {
+                    if existing.type == "auction" {
+                        sellType = .auction
+                        if let s = existing.startingBidCAD { startBidText = String(format: "%.2f", s) }
+                        if let e = existing.endDate { endDate = e }
+                    } else {
+                        sellType = .fixedPrice
+                        if let p = existing.buyNowPriceCAD { buyNowText = String(format: "%.2f", p) }
+                    }
+                }
+            }
+        }
+    }
+
+    private func submit() {
+        uiError = nil
+
+        let finalTitle = title.trimmedLocal
+        if finalTitle.isEmpty {
+            uiError = "Le titre est obligatoire."
+            return
+        }
+
+        let finalDesc = descriptionText.trimmedLocal
+        let desc: String? = finalDesc.isEmpty ? nil : finalDesc
+
+        switch sellType {
+        case .fixedPrice:
+            let normalized = buyNowText.trimmedLocal.replacingOccurrences(of: ",", with: ".")
+            guard let p = Double(normalized), p > 0 else {
+                uiError = "Entre un prix valide (ex: 25.00)."
+                return
+            }
+            onSubmit(finalTitle, desc, .fixedPrice, p, nil, nil)
+            dismiss()
+
+        case .auction:
+            let normalized = startBidText.trimmedLocal.replacingOccurrences(of: ",", with: ".")
+            guard let s = Double(normalized), s >= 0 else {
+                uiError = "Entre une mise de départ valide (ex: 0.00)."
+                return
+            }
+            onSubmit(finalTitle, desc, .auction, nil, s, endDate)
+            dismiss()
+        }
+    }
+}
+
+// MARK: - ✅ Sheet: modifier la carte
+
+private struct EditCardDetailsSheetView: View {
+    @Bindable var card: CardItem
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+
+    @State private var title: String = ""
+    @State private var notes: String = ""
+
+    @State private var playerName: String = ""
+    @State private var cardYear: String = ""
+    @State private var companyName: String = ""
+    @State private var setName: String = ""
+    @State private var cardNumber: String = ""
+
+    @State private var isGraded: Bool = false
+    @State private var gradingCompany: String = ""
+    @State private var gradeValue: String = ""
+    @State private var certificationNumber: String = ""
+
+    @State private var acquisitionSource: String = ""
+    @State private var acquisitionDate: Date = Date()
+    @State private var hasAcquisitionDate: Bool = false
+
+    @State private var purchasePriceText: String = ""
+
+    @State private var uiError: String? = nil
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Base") {
+                    TextField("Titre", text: $title)
+                    TextField("Notes", text: $notes, axis: .vertical)
+                        .lineLimit(2...6)
+                }
+
+                Section("Fiche de la carte") {
+                    TextField("Joueur", text: $playerName)
+                    TextField("Année", text: $cardYear)
+                    TextField("Compagnie", text: $companyName)
+                    TextField("Set", text: $setName)
+                    TextField("Numéro", text: $cardNumber)
+                }
+
+                Section("Grading") {
+                    Toggle("Carte gradée", isOn: $isGraded)
+
+                    if isGraded {
+                        TextField("Compagnie (PSA/BGS/SGC)", text: $gradingCompany)
+                        TextField("Note (ex: 10)", text: $gradeValue)
+                        TextField("Certification (optionnel)", text: $certificationNumber)
+                    }
+                }
+
+                Section("Acquisition") {
+                    Toggle("Date d’acquisition", isOn: $hasAcquisitionDate)
+                    if hasAcquisitionDate {
+                        DatePicker("Date", selection: $acquisitionDate, displayedComponents: .date)
+                    }
+
+                    TextField("Source", text: $acquisitionSource)
+
+                    TextField("Prix payé (optionnel)", text: $purchasePriceText)
+                        .keyboardType(.decimalPad)
+
+                    Text("$ CAD")
+                        .foregroundStyle(.secondary)
+                }
+
+                if let uiError, !uiError.isEmpty {
+                    Section {
+                        Text("⚠️ \(uiError)")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("Modifier")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Annuler") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Enregistrer") { save() }
+                }
+            }
+            .onAppear {
+                title = card.title
+                notes = card.notes ?? ""
+
+                playerName = card.playerName ?? ""
+                cardYear = card.cardYear ?? ""
+                companyName = card.companyName ?? ""
+                setName = card.setName ?? ""
+                cardNumber = card.cardNumber ?? ""
+
+                isGraded = (card.isGraded == true)
+                gradingCompany = card.gradingCompany ?? ""
+                gradeValue = card.gradeValue ?? ""
+                certificationNumber = card.certificationNumber ?? ""
+
+                acquisitionSource = card.acquisitionSource ?? ""
+                if let d = card.acquisitionDate {
+                    acquisitionDate = d
+                    hasAcquisitionDate = true
+                } else {
+                    hasAcquisitionDate = false
+                }
+
+                if let p = card.purchasePriceCAD {
+                    purchasePriceText = String(format: "%.2f", p)
+                } else {
+                    purchasePriceText = ""
+                }
+            }
+        }
+    }
+
+    private func save() {
+        uiError = nil
+
+        let finalTitle = title.trimmedLocal
+        if finalTitle.isEmpty {
+            uiError = "Le titre est obligatoire."
+            return
+        }
+
+        card.title = finalTitle
+        card.notes = notes.trimmedLocal.isEmpty ? nil : notes.trimmedLocal
+
+        card.playerName = playerName.trimmedLocal.isEmpty ? nil : playerName.trimmedLocal
+        card.cardYear = cardYear.trimmedLocal.isEmpty ? nil : cardYear.trimmedLocal
+        card.companyName = companyName.trimmedLocal.isEmpty ? nil : companyName.trimmedLocal
+        card.setName = setName.trimmedLocal.isEmpty ? nil : setName.trimmedLocal
+        card.cardNumber = cardNumber.trimmedLocal.isEmpty ? nil : cardNumber.trimmedLocal
+
+        card.isGraded = isGraded
+        if isGraded {
+            card.gradingCompany = gradingCompany.trimmedLocal.isEmpty ? nil : gradingCompany.trimmedLocal
+            card.gradeValue = gradeValue.trimmedLocal.isEmpty ? nil : gradeValue.trimmedLocal
+            card.certificationNumber = certificationNumber.trimmedLocal.isEmpty ? nil : certificationNumber.trimmedLocal
+        } else {
+            card.gradingCompany = nil
+            card.gradeValue = nil
+            card.certificationNumber = nil
+        }
+
+        card.acquisitionSource = acquisitionSource.trimmedLocal.isEmpty ? nil : acquisitionSource.trimmedLocal
+        card.acquisitionDate = hasAcquisitionDate ? acquisitionDate : nil
+
+        let pp = purchasePriceText.trimmedLocal.replacingOccurrences(of: ",", with: ".")
+        if pp.isEmpty {
+            card.purchasePriceCAD = nil
+        } else if let v = Double(pp), v >= 0 {
+            card.purchasePriceCAD = (v * 100).rounded() / 100
+        } else {
+            uiError = "Prix payé invalide (ex: 12.50)."
+            return
+        }
+
+        do {
+            try modelContext.save()
+            dismiss()
+        } catch {
+            uiError = error.localizedDescription
         }
     }
 }
@@ -644,534 +955,10 @@ private struct CardDetailListingMini: Identifiable {
     }
 }
 
-// MARK: - Sheet: Mettre en vente (minutes = 00/15/30/45 + min 8h)
-
-private struct CardDetailSellCardSheetView: View {
-    let card: CardItem
-    let existing: CardDetailListingMini?
-    let onSubmit: (_ title: String,
-                   _ description: String?,
-                   _ type: ListingType,
-                   _ buyNow: Double?,
-                   _ startBid: Double?,
-                   _ endDate: Date?) -> Void
-
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var title: String = ""
-    @State private var descriptionText: String = ""
-
-    @State private var type: ListingType = .fixedPrice
-
-    @State private var buyNowText: String = ""
-    @State private var startBidText: String = ""
-
-    // Valeur finale
-    @State private var endDate: Date = Date().addingTimeInterval(60 * 60 * 24)
-
-    // ✅ Composantes contrôlées
-    @State private var endDay: Date = Date()
-    @State private var endHour: Int = 12
-    @State private var endMinuteIndex: Int = 0 // 00/15/30/45
-
-    @State private var errorText: String? = nil
-
-    // ✅ Minimum 8 heures pour un encan + petit buffer (évite le gap avec request.time)
-    private let minAuctionDurationSeconds: TimeInterval = (8 * 60 * 60) + 120
-    private let minuteSteps: [Int] = [0, 15, 30, 45]
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Carte") {
-                    Text(card.title).font(.headline)
-                }
-
-                Section("Annonce") {
-                    TextField("Titre de l’annonce", text: $title)
-                        .textInputAutocapitalization(.sentences)
-                        .autocorrectionDisabled(true)
-
-                    TextField("Description (optionnel)", text: $descriptionText, axis: .vertical)
-                        .lineLimit(3...7)
-                        .textInputAutocapitalization(.sentences)
-                        .autocorrectionDisabled(true)
-                }
-
-                Section("Type") {
-                    Picker("Type", selection: $type) {
-                        Text("Prix fixe").tag(ListingType.fixedPrice)
-                        Text("Encan").tag(ListingType.auction)
-                    }
-                    .pickerStyle(.segmented)
-                    .onChange(of: type) { _, newValue in
-                        if newValue == .auction {
-                            ensureAuctionMinEnd()
-                        }
-                    }
-                }
-
-                if type == .fixedPrice {
-                    Section("Prix fixe") {
-                        TextField("Prix (CAD)", text: $buyNowText)
-                            .keyboardType(.decimalPad)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled(true)
-                    }
-                } else {
-                    Section("Encan") {
-                        TextField("Mise de départ (CAD)", text: $startBidText)
-                            .keyboardType(.decimalPad)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled(true)
-
-                        // ✅ Date (jour)
-                        DatePicker(
-                            "Date",
-                            selection: $endDay,
-                            in: minEndDate().startOfDay()...,
-                            displayedComponents: [.date]
-                        )
-                        .onChange(of: endDay) { _, _ in
-                            syncEndDateFromComponents()
-                        }
-
-                        // ✅ Heure + Minutes (00/15/30/45)
-                        HStack {
-                            Text("Heure")
-                            Spacer()
-
-                            Picker("", selection: $endHour) {
-                                ForEach(0..<24, id: \.self) { h in
-                                    Text(String(format: "%02d", h)).tag(h)
-                                }
-                            }
-                            .pickerStyle(.wheel)
-                            .frame(width: 90, height: 140)
-                            .clipped()
-                            .onChange(of: endHour) { _, _ in
-                                syncEndDateFromComponents()
-                            }
-
-                            Picker("", selection: $endMinuteIndex) {
-                                ForEach(0..<minuteSteps.count, id: \.self) { idx in
-                                    Text(String(format: "%02d", minuteSteps[idx])).tag(idx)
-                                }
-                            }
-                            .pickerStyle(.wheel)
-                            .frame(width: 90, height: 140)
-                            .clipped()
-                            .onChange(of: endMinuteIndex) { _, _ in
-                                syncEndDateFromComponents()
-                            }
-                        }
-
-                        Text("Minimum: 8 heures.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-
-                        Text("Fin: \(endDate.formatted(date: .abbreviated, time: .shortened))")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if let errorText {
-                    Section("Erreur") {
-                        Text(errorText).foregroundStyle(.red)
-                    }
-                }
-            }
-            .navigationTitle(existing == nil ? "Mettre en vente" : "Modifier la vente")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Annuler") { dismiss() }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Publier") { submit() }
-                }
-            }
-            .onAppear {
-                presetFromExisting()
-                endDate = roundToNextQuarter(endDate)
-                syncComponentsFromEndDate()
-                ensureAuctionMinEnd()
-            }
-        }
-    }
-
-    private func presetFromExisting() {
-        title = title.isEmpty ? card.title : title
-
-        if let existing {
-            type = (existing.type == "auction") ? .auction : .fixedPrice
-            if let p = existing.buyNowPriceCAD { buyNowText = String(format: "%.2f", p) }
-            if let s = existing.startingBidCAD { startBidText = String(format: "%.2f", s) }
-            if let end = existing.endDate { endDate = end }
-        } else {
-            if endDate <= Date() {
-                endDate = Date().addingTimeInterval(60 * 60 * 24)
-            }
-        }
-    }
-
-    // MARK: - Date helpers
-
-    private func minEndDate() -> Date {
-        Date().addingTimeInterval(minAuctionDurationSeconds)
-    }
-
-    private func ensureAuctionMinEnd() {
-        guard type == .auction else { return }
-        let minEnd = minEndDate()
-        if endDate < minEnd {
-            endDate = roundToNextQuarter(minEnd)
-            syncComponentsFromEndDate()
-        }
-    }
-
-    private func syncComponentsFromEndDate() {
-        let cal = Calendar.current
-
-        endDay = endDate.startOfDay()
-        endHour = cal.component(.hour, from: endDate)
-
-        let m = cal.component(.minute, from: endDate)
-        let nearest = nearestQuarterMinute(m)
-        endMinuteIndex = minuteSteps.firstIndex(of: nearest) ?? 0
-
-        // normaliser endDate exactement sur nos composantes
-        syncEndDateFromComponents()
-    }
-
-    private func syncEndDateFromComponents() {
-        let cal = Calendar.current
-        let minute = minuteSteps[endMinuteIndex]
-
-        var comps = cal.dateComponents([.year, .month, .day], from: endDay)
-        comps.hour = endHour
-        comps.minute = minute
-        comps.second = 0
-
-        if let d = cal.date(from: comps) {
-            endDate = d
-        }
-
-        ensureAuctionMinEnd()
-    }
-
-    private func nearestQuarterMinute(_ m: Int) -> Int {
-        var best = 0
-        var bestDiff = Int.max
-        for c in minuteSteps {
-            let diff = abs(c - m)
-            if diff < bestDiff {
-                bestDiff = diff
-                best = c
-            }
-        }
-        return best
-    }
-
-    private func roundToNextQuarter(_ date: Date) -> Date {
-        let cal = Calendar.current
-        let minute = cal.component(.minute, from: date)
-        let remainder = minute % 15
-        let add = (remainder == 0) ? 0 : (15 - remainder)
-
-        let rounded = cal.date(byAdding: .minute, value: add, to: date) ?? date
-        var c2 = cal.dateComponents([.year, .month, .day, .hour, .minute], from: rounded)
-        c2.second = 0
-        return cal.date(from: c2) ?? rounded
-    }
-
-    // MARK: - Submit
-
-    private func submit() {
-        errorText = nil
-
-        let cleanTitle = title.trimmedLocal
-        if cleanTitle.isEmpty {
-            errorText = "Le titre est requis."
-            return
-        }
-
-        let cleanDesc = descriptionText.trimmedLocal
-        let desc: String? = cleanDesc.isEmpty ? nil : cleanDesc
-
-        func toDouble(_ s: String) -> Double? {
-            let t = s.trimmedLocal
-            if t.isEmpty { return nil }
-            return Double(t.replacingOccurrences(of: ",", with: "."))
-        }
-
-        if type == .fixedPrice {
-            guard let price = toDouble(buyNowText), price > 0 else {
-                errorText = "Entre un prix valide."
-                return
-            }
-            onSubmit(cleanTitle, desc, .fixedPrice, price, nil, nil)
-            dismiss()
-        } else {
-            guard let start = toDouble(startBidText), start >= 0 else {
-                errorText = "Entre une mise de départ valide."
-                return
-            }
-
-            // ✅ revalider min 8h
-            let minEnd = minEndDate()
-            let finalEnd = roundToNextQuarter(endDate)
-
-            if finalEnd < minEnd {
-                errorText = "La fin de l’encan doit être au moins 8 heures dans le futur."
-                endDate = roundToNextQuarter(minEnd)
-                syncComponentsFromEndDate()
-                return
-            }
-
-            onSubmit(cleanTitle, desc, .auction, nil, start, finalEnd)
-            dismiss()
-        }
-    }
-}
-
-// MARK: - Sheet: Modifier la carte
-
-private struct EditCardDetailsSheetView: View {
-    let card: CardItem
-
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var modelContext
-
-    @State private var title: String = ""
-    @State private var notes: String = ""
-
-    @State private var playerName: String = ""
-    @State private var cardYear: String = ""
-    @State private var companyName: String = ""
-    @State private var setName: String = ""
-    @State private var cardNumber: String = ""
-
-    @State private var isGraded: Bool = false
-    @State private var gradingCompany: String = "PSA"
-    @State private var gradeValue: String = ""
-    @State private var certificationNumber: String = ""
-
-    @State private var hasAcquisitionDate: Bool = false
-    @State private var acquisitionDate: Date = Date()
-    @State private var acquisitionSource: String = ""
-    @State private var purchasePriceText: String = ""
-
-    @State private var errorText: String? = nil
-
-    private let gradingCompanies = ["PSA", "BGS", "SGC", "CGC", "Autre"]
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Infos") {
-                    TextField("Titre", text: $title)
-                        .textInputAutocapitalization(.sentences)
-                        .autocorrectionDisabled(true)
-
-                    TextField("Notes (optionnel)", text: $notes, axis: .vertical)
-                        .lineLimit(3...7)
-                        .textInputAutocapitalization(.sentences)
-                        .autocorrectionDisabled(true)
-                }
-
-                Section("Fiche de la carte") {
-                    TextField("Nom du joueur", text: $playerName)
-                        .textInputAutocapitalization(.words)
-                        .autocorrectionDisabled(true)
-
-                    TextField("Année (ex: 2023-24)", text: $cardYear)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
-                        .keyboardType(.asciiCapable)
-
-                    TextField("Compagnie (Upper Deck, Topps…)", text: $companyName)
-                        .textInputAutocapitalization(.words)
-                        .autocorrectionDisabled(true)
-
-                    TextField("Set (Series 1, SP Authentic…)", text: $setName)
-                        .textInputAutocapitalization(.words)
-                        .autocorrectionDisabled(true)
-
-                    TextField("Numéro (#201)", text: $cardNumber)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
-                        .keyboardType(.asciiCapable)
-                }
-
-                Section("Grading") {
-                    Toggle("Carte gradée", isOn: $isGraded)
-
-                    if isGraded {
-                        Picker("Compagnie", selection: $gradingCompany) {
-                            ForEach(gradingCompanies, id: \.self) { c in
-                                Text(c).tag(c)
-                            }
-                        }
-
-                        TextField("Note (ex: 10, 9.5)", text: $gradeValue)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled(true)
-
-                        TextField("Certification #", text: $certificationNumber)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled(true)
-                            .keyboardType(.asciiCapable)
-                    } else {
-                        Text("Si la carte n’est pas gradée, tu peux laisser ces champs vides.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Section("Acquisition") {
-                    Toggle("J’ai une date d’acquisition", isOn: $hasAcquisitionDate)
-
-                    if hasAcquisitionDate {
-                        DatePicker("Date", selection: $acquisitionDate, displayedComponents: .date)
-                    }
-
-                    TextField("Source (eBay, boutique, échange…)", text: $acquisitionSource)
-                        .textInputAutocapitalization(.words)
-                        .autocorrectionDisabled(true)
-
-                    HStack {
-                        TextField("Prix payé (ex: 25.00)", text: $purchasePriceText)
-                            .keyboardType(.decimalPad)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled(true)
-
-                        Text("$ CAD")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if let errorText {
-                    Section("Erreur") {
-                        Text(errorText).foregroundStyle(.red)
-                    }
-                }
-            }
-            .navigationTitle("Modifier")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Annuler") { dismiss() }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Enregistrer") { save() }
-                        .disabled(title.trimmedLocal.isEmpty)
-                }
-            }
-            .onAppear { preset() }
-            .onChange(of: isGraded) { _, newValue in
-                if !newValue {
-                    gradeValue = ""
-                    certificationNumber = ""
-                }
-            }
-        }
-    }
-
-    private func preset() {
-        title = card.title
-        notes = card.notes ?? ""
-
-        playerName = card.playerName ?? ""
-        cardYear = card.cardYear ?? ""
-        companyName = card.companyName ?? ""
-        setName = card.setName ?? ""
-        cardNumber = card.cardNumber ?? ""
-
-        isGraded = card.isGraded ?? false
-        gradingCompany = (card.gradingCompany?.trimmedLocal.isEmpty == false) ? (card.gradingCompany ?? "PSA") : "PSA"
-        gradeValue = card.gradeValue ?? ""
-        certificationNumber = card.certificationNumber ?? ""
-
-        if let d = card.acquisitionDate {
-            hasAcquisitionDate = true
-            acquisitionDate = d
-        } else {
-            hasAcquisitionDate = false
-            acquisitionDate = Date()
-        }
-
-        acquisitionSource = card.acquisitionSource ?? ""
-
-        if let p = card.purchasePriceCAD {
-            purchasePriceText = String(format: "%.2f", p)
-        } else {
-            purchasePriceText = ""
-        }
-    }
-
-    private func save() {
-        errorText = nil
-
-        let cleanTitle = title.trimmedLocal
-        if cleanTitle.isEmpty {
-            errorText = "Le titre est requis."
-            return
-        }
-
-        card.title = cleanTitle
-
-        let cleanNotes = notes.trimmedLocal
-        card.notes = cleanNotes.isEmpty ? nil : cleanNotes
-
-        card.playerName = playerName.trimmedLocal.nonEmptyOrNil
-        card.cardYear = cardYear.trimmedLocal.nonEmptyOrNil
-        card.companyName = companyName.trimmedLocal.nonEmptyOrNil
-        card.setName = setName.trimmedLocal.nonEmptyOrNil
-        card.cardNumber = cardNumber.trimmedLocal.nonEmptyOrNil
-
-        card.isGraded = isGraded
-        if isGraded {
-            card.gradingCompany = gradingCompany.trimmedLocal.nonEmptyOrNil
-            card.gradeValue = gradeValue.trimmedLocal.nonEmptyOrNil
-            card.certificationNumber = certificationNumber.trimmedLocal.nonEmptyOrNil
-        } else {
-            card.gradingCompany = nil
-            card.gradeValue = nil
-            card.certificationNumber = nil
-        }
-
-        card.acquisitionDate = hasAcquisitionDate ? acquisitionDate : nil
-        card.acquisitionSource = acquisitionSource.trimmedLocal.nonEmptyOrNil
-        card.purchasePriceCAD = parseMoney(purchasePriceText)
-
-        do {
-            try modelContext.save()
-            dismiss()
-        } catch {
-            errorText = error.localizedDescription
-        }
-    }
-
-    private func parseMoney(_ s: String) -> Double? {
-        let t = s.trimmedLocal
-        if t.isEmpty { return nil }
-        let normalized = t.replacingOccurrences(of: ",", with: ".")
-        guard let v = Double(normalized), v >= 0 else { return nil }
-        return (v * 100).rounded() / 100
-    }
-}
-
-// MARK: - Helpers
+// MARK: - Helpers (fichier local)
 
 private extension String {
     var trimmedLocal: String { trimmingCharacters(in: .whitespacesAndNewlines) }
-    var nonEmptyOrNil: String? { trimmedLocal.isEmpty ? nil : trimmedLocal }
-}
-
-private extension Date {
-    func startOfDay() -> Date {
-        Calendar.current.startOfDay(for: self)
-    }
 }
 
 private extension Optional where Wrapped == String {
@@ -1180,5 +967,3 @@ private extension Optional where Wrapped == String {
         return v
     }
 }
-
-

@@ -36,6 +36,9 @@ struct CardDetailView: View {
     // ✅ Patch UI: pause/publish
     @State private var isUpdatingStatus = false
 
+    // ✅ CONFIRMATION SUPPRESSION
+    @State private var showDeleteConfirm = false
+
     private let marketplace = MarketplaceService()
     private let db = Firestore.firestore()
 
@@ -229,10 +232,10 @@ struct CardDetailView: View {
                 }
             }
 
-            // ✅ SUPPRIMER LA CARTE (local)
+            // ✅ SUPPRIMER LA CARTE (local) — avec confirmation
             Section {
                 Button(role: .destructive) {
-                    Task { await deleteCardLocallyAndEndListingIfNeeded() }
+                    showDeleteConfirm = true
                 } label: {
                     Label("Supprimer la carte", systemImage: "trash")
                 }
@@ -286,6 +289,16 @@ struct CardDetailView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(uiErrorText ?? "")
+        }
+
+        // ✅ ALERTE CONFIRMATION SUPPRESSION
+        .alert("Supprimer la carte", isPresented: $showDeleteConfirm) {
+            Button("Annuler", role: .cancel) {}
+            Button("Supprimer", role: .destructive) {
+                Task { await deleteCardLocallyAndEndListingIfNeeded() }
+            }
+        } message: {
+            Text("Êtes-vous certain de vouloir supprimer cette carte? Cette action est irréversible.")
         }
     }
 

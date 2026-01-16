@@ -28,6 +28,14 @@ struct MyListingsHubView: View {
     @State private var isRefreshing: Bool = false
     @State private var toast: Toast? = nil
 
+    // ✅ Masquage local
+    @AppStorage("myListings.hiddenIds") private var hiddenIdsRaw: String = ""   // "id1,id2,id3"
+    @State private var showHiddenOnly: Bool = false
+
+    // ✅ Popover “…” (près de la carte)
+    @State private var popoverListing: ListingCloud? = nil
+    @State private var showPopover: Bool = false
+
     enum ViewMode: String { case list, grid }
 
     enum TypeFilter: String, CaseIterable, Identifiable {
@@ -37,11 +45,72 @@ struct MyListingsHubView: View {
         var id: String { rawValue }
     }
 
-    // ✅ Donne assez d’espace au titre à gauche (évite “Me..”)
-    // Ajuste 150 → 170 si tu ajoutes d’autres boutons à droite.
     private var leadingTitleWidth: CGFloat {
-        max(220, UIScreen.main.bounds.width - 150)
+        max(220, UIScreen.main.bounds.width - 170)
     }
+
+    // MARK: - Hidden ids helpers
+
+    private var hiddenIds: Set<String> {
+        Set(hiddenIdsRaw
+            .split(separator: ",")
+            .map { String($0) }
+            .filter { !$0.isEmpty }
+        )
+    }
+
+    private func setHiddenIds(_ ids: Set<String>) {
+        hiddenIdsRaw = ids.sorted().joined(separator: ",")
+    }
+
+    private func isHidden(_ listing: ListingCloud) -> Bool {
+        hiddenIds.contains(listing.id)
+    }
+
+    private func isListingActive(_ l: ListingCloud) -> Bool {
+        if l.status != "active" { return false }
+        if l.type == "auction", let end = l.endDate, end <= Date() { return false }
+        return true
+    }
+
+    private func canHide(_ l: ListingCloud) -> Bool {
+        return !isListingActive(l)
+    }
+
+    private func toggleHide(_ l: ListingCloud) {
+        if !canHide(l) {
+            toast = Toast(style: .info, title: "Annonce active — mets-la sur pause ou termine-la", systemImage: "info.circle")
+            Haptic.error()
+            return
+        }
+
+        var ids = hiddenIds
+        if ids.contains(l.id) {
+            ids.remove(l.id)
+            setHiddenIds(ids)
+            toast = Toast(style: .info, title: "Annonce réaffichée", systemImage: "eye")
+        } else {
+            ids.insert(l.id)
+            setHiddenIds(ids)
+            toast = Toast(style: .success, title: "Annonce masquée", systemImage: "eye.slash")
+        }
+        Haptic.light()
+    }
+
+    private func openPopover(for listing: ListingCloud) {
+        Haptic.light()
+        popoverListing = listing
+        DispatchQueue.main.async {
+            showPopover = true
+        }
+    }
+
+    private func closePopover() {
+        showPopover = false
+        popoverListing = nil
+    }
+
+    // MARK: - Body
 
     var body: some View {
         NavigationStack {
@@ -72,29 +141,23 @@ struct MyListingsHubView: View {
                                 )
                             } else if filtered.isEmpty {
                                 ContentUnavailableView(
-                                    "Aucune annonce",
+                                    showHiddenOnly ? "Aucune annonce masquée" : "Aucune annonce",
                                     systemImage: "tray.full",
-                                    description: Text("Aucune annonce correspondant à ce filtre.")
+                                    description: Text(showHiddenOnly ? "Tu n’as aucune annonce masquée." : "Aucune annonce correspondant à ce filtre.")
                                 )
                             } else {
-                                if viewMode == .grid {
-                                    gridMode
-                                } else {
-                                    listMode
-                                }
+                                if viewMode == .grid { gridMode } else { listMode }
                             }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
             }
-            // ✅ On ne met PAS navigationTitle("Mes annonces") sinon iOS le centre.
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
 
             .toolbar {
 
-                // ✅ Titre à gauche, avec largeur fixe suffisante => pas tronqué
                 ToolbarItem(placement: .topBarLeading) {
                     Text("Mes annonces")
                         .font(.headline)
@@ -103,8 +166,35 @@ struct MyListingsHubView: View {
                         .frame(width: leadingTitleWidth, alignment: .leading)
                 }
 
-                // ✅ Actions à droite
+                // ✅ IMPORTANT:
+                // - On GARDE le bouton cercle ellipsis.circle
+                // - On N'AFFICHE PAS un autre "ellipsis" à côté
                 ToolbarItemGroup(placement: .topBarTrailing) {
+
+                    Menu {
+                        Button {
+                            Haptic.light()
+                            showHiddenOnly.toggle()
+                        } label: {
+                            Label(
+                                showHiddenOnly ? "Voir non masquées" : "Voir masquées",
+                                systemImage: showHiddenOnly ? "eye" : "eye.slash"
+                            )
+                        }
+
+                        if !hiddenIds.isEmpty {
+                            Button(role: .destructive) {
+                                Haptic.light()
+                                setHiddenIds([])
+                                toast = Toast(style: .success, title: "Tout réaffiché", systemImage: "eye")
+                            } label: {
+                                Label("Réafficher tout", systemImage: "eye")
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .accessibilityLabel("Options")
 
                     Button {
                         Haptic.light()
@@ -150,11 +240,23 @@ struct MyListingsHubView: View {
                 }
             }
             .pickerStyle(.segmented)
-            .onChange(of: typeFilter) { _, _ in
-                Haptic.light()
-            }
+            .onChange(of: typeFilter) { _, _ in Haptic.light() }
 
             HStack(spacing: 8) {
+
+                Button {
+                    Haptic.light()
+                    showHiddenOnly.toggle()
+                    toast = Toast(
+                        style: .info,
+                        title: showHiddenOnly ? "Masquées" : "Non masquées",
+                        systemImage: showHiddenOnly ? "eye.slash" : "eye"
+                    )
+                } label: {
+                    Image(systemName: showHiddenOnly ? "eye.slash.fill" : "eye")
+                        .foregroundStyle(showHiddenOnly ? .primary : .secondary)
+                }
+
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
 
@@ -194,6 +296,10 @@ struct MyListingsHubView: View {
 
         return listings
             .filter { l in
+                if showHiddenOnly { return hiddenIds.contains(l.id) }
+                return !hiddenIds.contains(l.id)
+            }
+            .filter { l in
                 switch typeFilter {
                 case .all: return true
                 case .auctions: return l.type == "auction"
@@ -206,7 +312,6 @@ struct MyListingsHubView: View {
                 return hay.contains(q)
             }
             .sorted { a, b in
-                // ✅ Encans fin bientôt d'abord, sinon récents
                 if a.type != b.type { return a.type == "auction" }
                 if a.type == "auction" && b.type == "auction" {
                     let da = a.endDate ?? .distantFuture
@@ -230,12 +335,42 @@ struct MyListingsHubView: View {
                 spacing: 10
             ) {
                 ForEach(filtered) { listing in
-                    NavigationLink {
-                        ListingCloudDetailView(listing: listing)
-                    } label: {
-                        MyListingsGridCardDense(listing: listing, miseText: miseText)
+                    ZStack(alignment: .topLeading) {
+
+                        NavigationLink {
+                            ListingCloudDetailView(listing: listing)
+                        } label: {
+                            MyListingsGridCardDenseContent(listing: listing, miseText: miseText)
+                        }
+                        .buttonStyle(MyGridPressableLinkStyle())
+                        .zIndex(0)
+
+                        // ✅ “…” sur la carte (popover près de la carte)
+                        EllipsisOverlayAnchorButton {
+                            openPopover(for: listing)
+                        }
+                        .padding(.top, 8)     // ✅ même hauteur que le 1er badge à droite
+                        .padding(.leading, 8)
+                        .zIndex(10)
+                        .popover(isPresented: Binding(
+                            get: { showPopover && popoverListing?.id == listing.id },
+                            set: { newValue in
+                                if !newValue { closePopover() }
+                            }
+                        )) {
+                            ListingPopoverSingleAction(
+                                label: isHidden(listing) ? "Réafficher" : "Masquer",
+                                systemImage: isHidden(listing) ? "eye" : "eye.slash",
+                                enabled: canHide(listing),
+                                disabledHint: "Annonce active — mets-la sur pause ou termine-la",
+                                onTap: {
+                                    toggleHide(listing)
+                                    closePopover()
+                                }
+                            )
+                            .presentationCompactAdaptation(.popover)
+                        }
                     }
-                    .buttonStyle(MyGridPressableLinkStyle())
                 }
             }
             .padding(.horizontal, 10)
@@ -248,16 +383,46 @@ struct MyListingsHubView: View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 ForEach(Array(filtered.enumerated()), id: \.element.id) { idx, listing in
-                    NavigationLink {
-                        ListingCloudDetailView(listing: listing)
-                    } label: {
-                        MyListingsListRowWithDivider(
-                            listing: listing,
-                            miseText: miseText,
-                            showDivider: idx != filtered.count - 1
-                        )
+                    ZStack(alignment: .topTrailing) {
+
+                        NavigationLink {
+                            ListingCloudDetailView(listing: listing)
+                        } label: {
+                            MyListingsListRowWithDivider(
+                                listing: listing,
+                                miseText: miseText,
+                                showDivider: idx != filtered.count - 1
+                            )
+                        }
+                        .buttonStyle(MyListPressableLinkStyle())
+                        .zIndex(0)
+
+                        // ✅ “…” sur la rangée (popover)
+                        EllipsisOverlayAnchorButton {
+                            openPopover(for: listing)
+                        }
+                        .padding(.top, 2)
+                        .padding(.trailing, 2)
+                        .zIndex(10)
+                        .popover(isPresented: Binding(
+                            get: { showPopover && popoverListing?.id == listing.id },
+                            set: { newValue in
+                                if !newValue { closePopover() }
+                            }
+                        )) {
+                            ListingPopoverSingleAction(
+                                label: isHidden(listing) ? "Réafficher" : "Masquer",
+                                systemImage: isHidden(listing) ? "eye" : "eye.slash",
+                                enabled: canHide(listing),
+                                disabledHint: "Annonce active — mets-la sur pause ou termine-la",
+                                onTap: {
+                                    toggleHide(listing)
+                                    closePopover()
+                                }
+                            )
+                            .presentationCompactAdaptation(.popover)
+                        }
                     }
-                    .buttonStyle(MyListPressableLinkStyle())
                 }
                 Spacer(minLength: 12)
             }
@@ -285,7 +450,7 @@ struct MyListingsHubView: View {
         }
     }
 
-    // MARK: - Firestore (mes annonces = mes ventes)
+    // MARK: - Firestore (mes annonces)
 
     private func startListening(forceRestart: Bool = false) {
         guard let uid = session.user?.uid else { return }
@@ -311,11 +476,64 @@ struct MyListingsHubView: View {
     }
 }
 
+// MARK: - Popover single action (UX: seulement l’œil + “Masquer”)
+
+private struct ListingPopoverSingleAction: View {
+
+    let label: String
+    let systemImage: String
+    let enabled: Bool
+    let disabledHint: String
+    let onTap: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+
+            Button {
+                onTap()
+            } label: {
+                Label(label, systemImage: systemImage)
+                    .font(.body.weight(.semibold))
+            }
+            .disabled(!enabled)
+
+            if !enabled {
+                Text(disabledHint)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+        .frame(minWidth: 220)
+    }
+}
+
+// MARK: - “…” overlay button (tap fiable au-dessus d’un NavigationLink)
+
+private struct EllipsisOverlayAnchorButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button {
+            action()
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(.primary)
+                .padding(8)
+                .background(Circle().fill(Color(.systemBackground).opacity(0.92)))
+                .overlay(Circle().stroke(Color.black.opacity(0.12), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .contentShape(Circle())
+    }
+}
+
 //
-// MARK: - GRID CARD (local à MyListingsHubView)
+// MARK: - GRID CARD CONTENT
 //
 
-private struct MyListingsGridCardDense: View {
+private struct MyListingsGridCardDenseContent: View {
     let listing: ListingCloud
     let miseText: (Int) -> String
 
@@ -342,31 +560,37 @@ private struct MyListingsGridCardDense: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
 
-            ZStack(alignment: .topTrailing) {
+            ZStack(alignment: .top) {
                 MyListingsThumb(urlString: listing.imageUrl, height: 190)
 
-                VStack(alignment: .trailing, spacing: 6) {
-                    if listing.shouldShowGradingBadge, let label = listing.gradingLabel {
-                        GradingOverlayBadge(label: label, compact: false)
-                    }
+                HStack(alignment: .top) {
+                    Spacer(minLength: 0)
 
-                    if let badge = listing.statusBadge, listing.status != "active" {
-                        MyStatusChip(
-                            text: badge.text,
-                            systemImage: badge.icon,
-                            color: badge.color,
-                            backgroundOpacity: badge.backgroundOpacity,
-                            strokeOpacity: badge.strokeOpacity,
-                            isOverlayOnImage: true
-                        )
-                    }
+                    VStack(alignment: .trailing, spacing: 6) {
 
-                    if isEndingSoon {
-                        MyEndingSoonBadgeOverlay(compact: false)
+                        // ✅ Priorité “Terminée” avant PSA
+                        if let badge = listing.statusBadge, listing.status != "active" {
+                            MyStatusChip(
+                                text: badge.text,
+                                systemImage: badge.icon,
+                                color: badge.color,
+                                backgroundOpacity: badge.backgroundOpacity,
+                                strokeOpacity: badge.strokeOpacity,
+                                isOverlayOnImage: true
+                            )
+                        }
+
+                        if listing.shouldShowGradingBadge, let label = listing.gradingLabel {
+                            GradingOverlayBadge(label: label, compact: false)
+                        }
+
+                        if isEndingSoon {
+                            MyEndingSoonBadgeOverlay(compact: false)
+                        }
                     }
                 }
                 .padding(.top, 8)
-                .padding(.trailing, 8)
+                .padding(.horizontal, 8)
             }
 
             Text(listing.title)
@@ -455,11 +679,24 @@ private struct MyListingsListRowCompact: View {
             ZStack(alignment: .topTrailing) {
                 MyListingsThumb(urlString: listing.imageUrl, size: CGSize(width: 66, height: 92))
 
-                if listing.shouldShowGradingBadge, let label = listing.gradingLabel {
-                    GradingOverlayBadge(label: label, compact: true)
-                        .padding(.top, 6)
-                        .padding(.trailing, 6)
+                // ✅ Priorité “Terminée” avant PSA (sur l’image)
+                VStack(alignment: .trailing, spacing: 6) {
+                    if let badge = listing.statusBadge, listing.status != "active" {
+                        MyStatusChip(
+                            text: badge.text,
+                            systemImage: badge.icon,
+                            color: badge.color,
+                            backgroundOpacity: badge.backgroundOpacity,
+                            strokeOpacity: badge.strokeOpacity,
+                            isOverlayOnImage: true
+                        )
+                    }
+                    if listing.shouldShowGradingBadge, let label = listing.gradingLabel {
+                        GradingOverlayBadge(label: label, compact: true)
+                    }
                 }
+                .padding(.top, 6)
+                .padding(.trailing, 6)
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -478,17 +715,6 @@ private struct MyListingsListRowCompact: View {
 
                     if isEndingSoon {
                         MyEndingSoonChipInline()
-                    }
-
-                    if let badge = listing.statusBadge, listing.status != "active" {
-                        MyStatusChip(
-                            text: badge.text,
-                            systemImage: badge.icon,
-                            color: badge.color,
-                            backgroundOpacity: badge.backgroundOpacity,
-                            strokeOpacity: badge.strokeOpacity,
-                            isOverlayOnImage: false
-                        )
                     }
 
                     Spacer(minLength: 0)
@@ -587,12 +813,8 @@ private struct MyEndingSoonBadgeOverlay: View {
         }
         .padding(.horizontal, compact ? 8 : 10)
         .padding(.vertical, compact ? 5 : 6)
-        .background(
-            Capsule().fill(Color(.systemBackground).opacity(0.92))
-        )
-        .overlay(
-            Capsule().stroke(Color.orange.opacity(0.75), lineWidth: 1)
-        )
+        .background(Capsule().fill(Color(.systemBackground).opacity(0.92)))
+        .overlay(Capsule().stroke(Color.orange.opacity(0.75), lineWidth: 1))
         .foregroundStyle(Color.orange)
         .shadow(color: Color.black.opacity(0.10), radius: 2, x: 0, y: 1)
     }

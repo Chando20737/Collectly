@@ -26,6 +26,10 @@ struct ProfileView: View {
     // ✅ NOUVEAU: évite l’effet “ça redemande”
     @State private var isLoadingUsername: Bool = false
 
+    // ✅ Supprimer compte
+    @State private var showDeleteAccountConfirm: Bool = false
+    @State private var isDeletingAccount: Bool = false
+
     private let db = Firestore.firestore()
 
     // Aligné sur tes rules actuelles: ^[A-Za-z0-9_]+$
@@ -86,9 +90,7 @@ struct ProfileView: View {
                                     .lineLimit(1)
                             }
 
-                            Text("✅ Username défini.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                            // ✅ RETIRÉ: "✅ Username défini." (inutile)
 
                         } else {
                             TextField("Nom d’utilisateur", text: $username)
@@ -124,6 +126,21 @@ struct ProfileView: View {
                             sendPasswordReset(email: user.email)
                         }
                         .disabled(isSendingPasswordReset || user.email == nil)
+
+                        // ✅ Nouveau: Supprimer mon compte (sous "Modifier mon mot de passe")
+                        Button(role: .destructive) {
+                            showDeleteAccountConfirm = true
+                        } label: {
+                            if isDeletingAccount {
+                                HStack(spacing: 10) {
+                                    ProgressView()
+                                    Text("Suppression du compte…")
+                                }
+                            } else {
+                                Text("Supprimer mon compte")
+                            }
+                        }
+                        .disabled(isDeletingAccount)
                     }
                 }
 
@@ -148,6 +165,14 @@ struct ProfileView: View {
             }
             .onAppear { loadProfile() }
             .onChange(of: session.user?.uid) { _, _ in loadProfile() }
+            .alert("Supprimer le compte", isPresented: $showDeleteAccountConfirm) {
+                Button("Annuler", role: .cancel) { }
+                Button("Supprimer", role: .destructive) {
+                    Task { await deleteAccountConfirmed() }
+                }
+            } message: {
+                Text("Es-tu certain de vouloir supprimer ton compte? Cette action est irréversible.")
+            }
         }
     }
 
@@ -245,6 +270,9 @@ struct ProfileView: View {
         isSavingUsername = false
         isSendingPasswordReset = false
         isLoadingUsername = false
+
+        showDeleteAccountConfirm = false
+        isDeletingAccount = false
     }
 
     // MARK: - Save username (set once)
@@ -379,5 +407,45 @@ struct ProfileView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Delete account
+
+    private func deleteAccountConfirmed() async {
+        errorText = nil
+        successText = nil
+
+        guard session.user != nil else {
+            errorText = "Utilisateur non connecté."
+            return
+        }
+
+        isDeletingAccount = true
+        defer { isDeletingAccount = false }
+
+        // ⚠️ MVP: on supprime le compte Auth.
+        // IMPORTANT: pour supprimer aussi les docs Firestore (users/uid, usernames/xxx, listings, etc.)
+        // c’est fortement recommandé via Cloud Functions (admin privileges).
+        do {
+            try await Auth.auth().currentUser?.delete()
+            await MainActor.run {
+                successText = "Compte supprimé."
+                resetLocalState()
+            }
+        } catch {
+            await MainActor.run {
+                // Cas fréquent: Firebase exige une "recent login" -> il faut re-auth.
+                errorText = humanizeDeleteAccountError(error)
+            }
+        }
+    }
+
+    private func humanizeDeleteAccountError(_ error: Error) -> String {
+        let ns = error as NSError
+        // FIRAuthErrorDomain: 17014 = requires recent login (souvent)
+        if ns.domain == AuthErrorDomain, ns.code == AuthErrorCode.requiresRecentLogin.rawValue {
+            return "Pour supprimer ton compte, tu dois te reconnecter (sécurité Firebase). Déconnecte-toi puis reconnecte-toi, et réessaie."
+        }
+        return error.localizedDescription
     }
 }

@@ -466,7 +466,9 @@ struct ContentView: View {
                 } message: {
                     Text(uiErrorText ?? "")
                 }
-                .alert("Supprimer", isPresented: $showDeleteConfirm) {
+
+                // ✅ CONFIRMATION SUPPRESSION (single + batch) — texte amélioré
+                .alert(deleteAlertTitle, isPresented: $showDeleteConfirm) {
                     Button("Annuler", role: .cancel) { pendingDeleteItems = [] }
                     Button("Supprimer", role: .destructive) {
                         let toDelete = pendingDeleteItems
@@ -474,11 +476,9 @@ struct ContentView: View {
                         deleteItemsNow(toDelete)
                     }
                 } message: {
-                    let count = pendingDeleteItems.count
-                    Text(count <= 1
-                         ? "Supprimer cette carte? Cette action est irréversible."
-                         : "Supprimer ces \(count) cartes? Cette action est irréversible.")
+                    Text(deleteAlertMessage)
                 }
+
                 .alert("Fusionner", isPresented: $showMergeConfirm) {
                     Button("Annuler", role: .cancel) { pendingMergeItems = [] }
                     Button("Fusionner", role: .destructive) {
@@ -497,6 +497,22 @@ struct ContentView: View {
         .onAppear {
             restoreUIState()
             if groupBy != .none { rebuildExpandedKeys() }
+        }
+    }
+
+    // MARK: - Texte alert suppression
+
+    private var deleteAlertTitle: String {
+        let count = pendingDeleteItems.count
+        return count <= 1 ? "Supprimer la carte" : "Supprimer des cartes"
+    }
+
+    private var deleteAlertMessage: String {
+        let count = pendingDeleteItems.count
+        if count <= 1 {
+            return "Êtes-vous certain de vouloir supprimer cette carte? Cette action est irréversible."
+        } else {
+            return "Êtes-vous certain de vouloir supprimer ces \(count) cartes? Cette action est irréversible."
         }
     }
 
@@ -559,7 +575,7 @@ struct ContentView: View {
         Haptics.light()
     }
 
-    // MARK: - Quantity (renommé pour éviter redeclare)
+    // MARK: - Quantity
 
     private func quantity(_ card: CardItem) -> Int {
         CollectionQuantityStore.quantity(id: card.id)
@@ -822,7 +838,7 @@ struct ContentView: View {
             ) {
                 ForEach(items) { card in
                     if isSelectionMode {
-                        // ✅ FIX: En sélection, tap = toggle sélection (pas de NavigationLink)
+                        // ✅ En sélection: tap = toggle sélection (pas de NavigationLink)
                         Button {
                             toggleSelected(card)
                         } label: {
@@ -896,7 +912,6 @@ struct ContentView: View {
         List {
             ForEach(items) { card in
                 if isSelectionMode {
-                    // ✅ FIX: En sélection, tap = toggle sélection
                     Button {
                         toggleSelected(card)
                     } label: {
@@ -1000,7 +1015,6 @@ struct ContentView: View {
                         ) {
                             ForEach(section.items) { card in
                                 if isSelectionMode {
-                                    // ✅ FIX: En sélection, tap = toggle sélection
                                     Button {
                                         toggleSelected(card)
                                     } label: {
@@ -1074,7 +1088,6 @@ struct ContentView: View {
                     if expandedSectionKeys.contains(section.key) {
                         ForEach(section.items) { card in
                             if isSelectionMode {
-                                // ✅ FIX: En sélection, tap = toggle sélection
                                 Button {
                                     toggleSelected(card)
                                 } label: {
@@ -1711,7 +1724,7 @@ private struct CollectionGridCard: View {
                 .fill(Color(.secondarySystemGroupedBackground))
         )
         .contentShape(Rectangle())
-        // ✅ FIX: Pas de onTapGesture ici (ça cassait l’ouverture du NavigationLink)
+        // ✅ Important: pas de onTapGesture ici (sinon ça bloque l’ouverture du NavigationLink)
     }
 
     private struct QuantityPill: View {
@@ -1810,7 +1823,7 @@ private struct CollectionListRow: View {
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
-        // ✅ FIX: Pas de onTapGesture ici (ça cassait l’ouverture du NavigationLink)
+        // ✅ Important: pas de onTapGesture ici (sinon ça bloque l’ouverture du NavigationLink)
     }
 }
 
@@ -1938,7 +1951,6 @@ private enum Haptics {
 }
 
 // MARK: - ✅ CollectionQuantityStore (UserDefaults)
-// Renommé pour éviter "Invalid redeclaration of QuantityStore" si tu en as déjà un ailleurs.
 
 private enum CollectionQuantityStore {
     private static let key = "collection.quantityByCardId" // [String: Int]

@@ -7,12 +7,15 @@
 import Foundation
 
 extension CardItem {
-    /// Libellé de grading lisible partout (Grid, List, QuickEdit, Detail)
+
+    /// ✅ Libellé de grading lisible partout (Grid, List, Quick Edit, Detail)
+    /// Exemple: "PSA 10" ou "10" si la compagnie est vide.
     var gradingLabel: String? {
-        let g = (gradeValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let c = (gradingCompany ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !g.isEmpty else { return nil }
-        return c.isEmpty ? g : "\(c) \(g)"
+        let grade = (gradeValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let company = (gradingCompany ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !grade.isEmpty else { return nil }
+        return company.isEmpty ? grade : "\(company) \(grade)"
     }
 }
 

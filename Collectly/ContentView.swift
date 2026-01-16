@@ -40,9 +40,17 @@ struct ContentView: View {
     // ✅ Quick edit
     @State private var quickEditCard: CardItem? = nil
 
-    // ✅ Confirmation suppression
+    // ✅ Confirmation suppression (single + batch)
     @State private var pendingDeleteItems: [CardItem] = []
     @State private var showDeleteConfirm = false
+
+    // ✅ Forcer refresh UI quand on toggle favoris / quantité (UserDefaults)
+    @State private var favoritesTick: Int = 0
+    @State private var quantityTick: Int = 0
+
+    // ✅ Multi-selection
+    @State private var isSelectionMode: Bool = false
+    @State private var selectedIds: Set<UUID> = []
 
     private let marketplace = MarketplaceService()
 
@@ -93,6 +101,7 @@ struct ContentView: View {
         case titleZA = "Titre Z → A"
         case valueHigh = "Valeur ↓"
         case valueLow = "Valeur ↑"
+        case favoritesFirst = "Favoris d’abord"
 
         var id: String { rawValue }
 
@@ -104,26 +113,56 @@ struct ContentView: View {
             case .titleZA: return "text.line.last.and.arrowtriangle.forward"
             case .valueHigh: return "arrow.down.circle"
             case .valueLow: return "arrow.up.circle"
+            case .favoritesFirst: return "star.fill"
             }
         }
     }
 
+    // ✅ AJOUT: filtres “Champs manquants”
     enum FilterOption: String, CaseIterable, Identifiable {
         case all = "Toutes"
+        case favorites = "Favoris"
+
         case withValue = "Avec valeur"
         case withoutValue = "Sans valeur"
+
         case withNotes = "Avec notes"
         case withoutNotes = "Sans notes"
+
+        // Champs manquants
+        case missingPhoto = "Sans photo"
+        case missingYear = "Sans année"
+        case missingSet = "Sans set"
+        case missingPlayer = "Sans joueur"
+        case missingGrading = "Sans grading"
 
         var id: String { rawValue }
 
         var systemImage: String {
             switch self {
             case .all: return "line.3.horizontal.decrease.circle"
+            case .favorites: return "star.fill"
+
             case .withValue: return "dollarsign.circle"
             case .withoutValue: return "dollarsign.circle.fill"
+
             case .withNotes: return "note.text"
             case .withoutNotes: return "note.text.badge.plus"
+
+            case .missingPhoto: return "photo.badge.exclamationmark"
+            case .missingYear: return "calendar.badge.exclamationmark"
+            case .missingSet: return "square.stack.3d.up.badge.exclamationmark"
+            case .missingPlayer: return "person.badge.minus"
+            case .missingGrading: return "checkmark.seal"
+            }
+        }
+
+        var isMissingFieldFilter: Bool {
+            switch self {
+            case .missingPhoto, .missingYear, .missingSet, .missingPlayer, .missingGrading:
+                return true
+            default:
+                return false
             }
         }
     }
@@ -143,21 +182,21 @@ struct ContentView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button { showAddSheet = true } label: {
-                            Image(systemName: "plus")
-                        }
-                        .disabled(true)
-                        .accessibilityLabel("Ajouter une carte")
+                        Button { showAddSheet = true } label: { Image(systemName: "plus") }
+                            .disabled(true)
+                            .accessibilityLabel("Ajouter une carte")
                     }
                 }
 
             } else {
 
-                // ✅ Connecté
+                let _ = favoritesTick // force refresh when favorites change
+                let _ = quantityTick  // force refresh when quantity changes
+
                 let items = filteredSortedAndFilteredCards
                 let totalValue = totalEstimatedValue(of: items)
+                let totalCopies = totalCopiesCount(of: items)
 
-                // ✅ Si regroupé: sections calculées une fois (header + UI)
                 let groupedSections: [CollectionSection] = {
                     if groupBy == .none { return [] }
                     return buildSections(from: items, groupBy: groupBy, sectionSort: sectionSort)
@@ -166,7 +205,8 @@ struct ContentView: View {
                 let sectionCount = groupedSections.count
                 let allExpanded = groupedAllExpanded(keys: Set(groupedSections.map { $0.key }))
 
-                Group {
+                VStack(spacing: 0) {
+
                     if items.isEmpty {
                         ContentUnavailableView(
                             "Ma collection",
@@ -174,57 +214,71 @@ struct ContentView: View {
                             description: Text(emptyMessage)
                         )
                     } else {
-                        VStack(spacing: 0) {
 
-                            CollectionMiniHeader(
-                                count: items.count,
-                                totalValueCAD: totalValue,
-                                hasActiveFilter: filter != .all,
-                                hasActiveSearch: !searchText.trimmedLocal.isEmpty,
-                                sortLabel: sort.rawValue,
-                                groupLabel: groupBy.rawValue,
-                                isGrouped: groupBy != .none,
-                                sectionSortLabel: sectionSort.rawValue,
-                                sectionCount: sectionCount,
-                                groupAllExpanded: allExpanded,
-                                onToggleAll: {
-                                    toggleAllSections(keys: Set(groupedSections.map { $0.key }))
-                                },
-                                onReset: {
-                                    filter = .all
-                                    sort = .newest
-                                    searchText = ""
-                                    groupBy = .none
-                                    sectionSort = .valueHigh
-                                }
-                            )
-                            .padding(.horizontal, 12)
-                            .padding(.top, 8)
-                            .padding(.bottom, 6)
-
-                            Picker("Affichage", selection: $viewMode) {
-                                ForEach(ViewMode.allCases) { m in
-                                    Text(m.rawValue).tag(m)
-                                }
+                        CollectionMiniHeader(
+                            count: items.count,
+                            totalCopies: totalCopies,
+                            totalValueCAD: totalValue,
+                            hasActiveFilter: filter != .all,
+                            hasActiveSearch: !searchText.trimmedLocal.isEmpty,
+                            sortLabel: sort.rawValue,
+                            groupLabel: groupBy.rawValue,
+                            isGrouped: groupBy != .none,
+                            sectionSortLabel: sectionSort.rawValue,
+                            sectionCount: sectionCount,
+                            groupAllExpanded: allExpanded,
+                            isFavoritesFilterOn: filter == .favorites,
+                            missingFilterLabel: filter.isMissingFieldFilter ? filter.rawValue : nil,
+                            onToggleAll: { toggleAllSections(keys: Set(groupedSections.map { $0.key })) },
+                            onReset: {
+                                filter = .all
+                                sort = .newest
+                                searchText = ""
+                                groupBy = .none
+                                sectionSort = .valueHigh
+                                Haptics.light()
                             }
-                            .pickerStyle(.segmented)
-                            .padding(.horizontal, 12)
-                            .padding(.bottom, 8)
+                        )
+                        .padding(.horizontal, 12)
+                        .padding(.top, 8)
+                        .padding(.bottom, 6)
 
-                            if groupBy == .none {
-                                if viewMode == .grid {
-                                    collectionGrid(items)
-                                } else {
-                                    collectionList(items)
-                                }
-                            } else {
-                                if viewMode == .grid {
-                                    groupedGrid(groupedSections)
-                                } else {
-                                    groupedList(groupedSections)
-                                }
+                        Picker("Affichage", selection: $viewMode) {
+                            ForEach(ViewMode.allCases) { m in
+                                Text(m.rawValue).tag(m)
                             }
                         }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 8)
+
+                        // ✅ Contenu (groupé / non groupé)
+                        if groupBy == .none {
+                            if viewMode == .grid {
+                                collectionGrid(items)
+                            } else {
+                                collectionList(items)
+                            }
+                        } else {
+                            if viewMode == .grid {
+                                groupedGrid(groupedSections)
+                            } else {
+                                groupedList(groupedSections)
+                            }
+                        }
+                    }
+
+                    // ✅ Barre multi-sélection
+                    if isSelectionMode {
+                        CollectionSelectionToolbar(
+                            selectedCount: selectedIds.count,
+                            onIncrementQty: { incrementSelectedQuantity(in: items) },
+                            onDecrementQty: { decrementSelectedQuantity(in: items) },
+                            onFavorite: { favoriteSelected(in: items) },
+                            onUnfavorite: { unfavoriteSelected(in: items) },
+                            onDelete: { confirmDeleteSelected(in: items) },
+                            onCancel: { exitSelectionMode() }
+                        )
                     }
                 }
                 .navigationTitle("")
@@ -232,117 +286,167 @@ struct ContentView: View {
                 .searchable(text: $searchText, prompt: "Rechercher une carte…")
                 .toolbar {
 
-                    // ✅ Filtrer
+                    // ✅ Multi-select toggle + Tout sélectionner
                     ToolbarItem(placement: .topBarLeading) {
-                        Menu {
-                            Picker("Filtrer", selection: $filter) {
-                                ForEach(FilterOption.allCases) { opt in
-                                    Label(opt.rawValue, systemImage: opt.systemImage)
-                                        .tag(opt)
-                                }
-                            }
-
-                            if filter != .all {
-                                Divider()
-                                Button(role: .destructive) {
-                                    filter = .all
+                        if isSelectionMode {
+                            Menu {
+                                Button {
+                                    selectAllVisible(items)
                                 } label: {
-                                    Label("Réinitialiser les filtres", systemImage: "xmark.circle")
+                                    Label("Tout sélectionner", systemImage: "checkmark.circle")
                                 }
-                            }
-                        } label: {
-                            Image(systemName: filter == .all
-                                  ? "line.3.horizontal.decrease.circle"
-                                  : "line.3.horizontal.decrease.circle.fill")
-                        }
-                        .accessibilityLabel("Filtrer")
-                    }
 
-                    // ✅ Trier items (cartes)
-                    ToolbarItem(placement: .topBarLeading) {
-                        Menu {
-                            Picker("Trier", selection: $sort) {
-                                ForEach(SortOption.allCases) { opt in
-                                    Label(opt.rawValue, systemImage: opt.systemImage)
-                                        .tag(opt)
+                                Button {
+                                    clearSelection()
+                                } label: {
+                                    Label("Tout désélectionner", systemImage: "circle")
                                 }
-                            }
-                        } label: {
-                            Image(systemName: "arrow.up.arrow.down")
-                        }
-                        .accessibilityLabel("Trier")
-                    }
 
-                    // ✅ Regrouper + Tri sections
-                    ToolbarItem(placement: .topBarLeading) {
-                        Menu {
-                            Picker("Regrouper par", selection: $groupBy) {
-                                ForEach(GroupByOption.allCases) { opt in
-                                    Label(opt.rawValue, systemImage: opt.systemImage)
-                                        .tag(opt)
-                                }
-                            }
-
-                            if groupBy != .none {
                                 Divider()
 
-                                Picker("Trier les sections", selection: $sectionSort) {
-                                    ForEach(SectionSortOption.allCases) { opt in
-                                        Label(opt.rawValue, systemImage: opt.systemImage)
-                                            .tag(opt)
+                                Button(role: .destructive) {
+                                    exitSelectionMode()
+                                } label: {
+                                    Label("Terminer la sélection", systemImage: "xmark.circle")
+                                }
+                            } label: {
+                                Label("Tout", systemImage: "checkmark.circle")
+                            }
+                            .accessibilityLabel("Actions de sélection")
+                        } else {
+                            Button("Sélectionner") {
+                                enterSelectionMode()
+                            }
+                            .accessibilityLabel("Activer la sélection")
+                        }
+                    }
+
+                    // ✅ Filtrer / Trier / Regrouper masqués en sélection (plus clair)
+                    if !isSelectionMode {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Menu {
+
+                                // ✅ 1) Base
+                                Section("Filtrer") {
+                                    Picker("Filtrer", selection: $filter) {
+                                        Label(FilterOption.all.rawValue, systemImage: FilterOption.all.systemImage).tag(FilterOption.all)
+                                        Label(FilterOption.favorites.rawValue, systemImage: FilterOption.favorites.systemImage).tag(FilterOption.favorites)
+                                        Label(FilterOption.withValue.rawValue, systemImage: FilterOption.withValue.systemImage).tag(FilterOption.withValue)
+                                        Label(FilterOption.withoutValue.rawValue, systemImage: FilterOption.withoutValue.systemImage).tag(FilterOption.withoutValue)
+                                        Label(FilterOption.withNotes.rawValue, systemImage: FilterOption.withNotes.systemImage).tag(FilterOption.withNotes)
+                                        Label(FilterOption.withoutNotes.rawValue, systemImage: FilterOption.withoutNotes.systemImage).tag(FilterOption.withoutNotes)
                                     }
                                 }
-                            }
 
-                            if groupBy != .none {
                                 Divider()
-                                Button {
-                                    groupBy = .none
-                                } label: {
-                                    Label("Désactiver le regroupement", systemImage: "xmark.circle")
+
+                                // ✅ 2) Champs manquants
+                                Section("Champs manquants") {
+                                    Button { filter = .missingPhoto } label: {
+                                        Label(FilterOption.missingPhoto.rawValue, systemImage: FilterOption.missingPhoto.systemImage)
+                                    }
+                                    Button { filter = .missingYear } label: {
+                                        Label(FilterOption.missingYear.rawValue, systemImage: FilterOption.missingYear.systemImage)
+                                    }
+                                    Button { filter = .missingSet } label: {
+                                        Label(FilterOption.missingSet.rawValue, systemImage: FilterOption.missingSet.systemImage)
+                                    }
+                                    Button { filter = .missingPlayer } label: {
+                                        Label(FilterOption.missingPlayer.rawValue, systemImage: FilterOption.missingPlayer.systemImage)
+                                    }
+                                    Button { filter = .missingGrading } label: {
+                                        Label(FilterOption.missingGrading.rawValue, systemImage: FilterOption.missingGrading.systemImage)
+                                    }
                                 }
+
+                                if filter != .all {
+                                    Divider()
+                                    Button(role: .destructive) {
+                                        filter = .all
+                                    } label: {
+                                        Label("Réinitialiser les filtres", systemImage: "xmark.circle")
+                                    }
+                                }
+
+                            } label: {
+                                Image(systemName: filter == .all
+                                      ? "line.3.horizontal.decrease.circle"
+                                      : "line.3.horizontal.decrease.circle.fill")
                             }
-                        } label: {
-                            Image(systemName: groupBy == .none ? "square.grid.2x2" : "square.grid.2x2.fill")
+                            .accessibilityLabel("Filtrer")
                         }
-                        .accessibilityLabel("Regrouper")
+
+                        ToolbarItem(placement: .topBarLeading) {
+                            Menu {
+                                Picker("Trier", selection: $sort) {
+                                    ForEach(SortOption.allCases) { opt in
+                                        Label(opt.rawValue, systemImage: opt.systemImage).tag(opt)
+                                    }
+                                }
+                            } label: {
+                                Image(systemName: "arrow.up.arrow.down")
+                            }
+                            .accessibilityLabel("Trier")
+                        }
+
+                        ToolbarItem(placement: .topBarLeading) {
+                            Menu {
+                                Picker("Regrouper par", selection: $groupBy) {
+                                    ForEach(GroupByOption.allCases) { opt in
+                                        Label(opt.rawValue, systemImage: opt.systemImage).tag(opt)
+                                    }
+                                }
+
+                                if groupBy != .none {
+                                    Divider()
+                                    Picker("Trier les sections", selection: $sectionSort) {
+                                        ForEach(SectionSortOption.allCases) { opt in
+                                            Label(opt.rawValue, systemImage: opt.systemImage).tag(opt)
+                                        }
+                                    }
+                                }
+
+                                if groupBy != .none {
+                                    Divider()
+                                    Button { groupBy = .none } label: {
+                                        Label("Désactiver le regroupement", systemImage: "xmark.circle")
+                                    }
+                                }
+                            } label: {
+                                Image(systemName: groupBy == .none ? "square.grid.2x2" : "square.grid.2x2.fill")
+                            }
+                            .accessibilityLabel("Regrouper")
+                        }
                     }
 
-                    // ✅ Ajouter
+                    // ✅ Ajouter (désactivé en sélection)
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button { showAddSheet = true } label: {
-                            Image(systemName: "plus")
-                        }
-                        .accessibilityLabel("Ajouter une carte")
+                        Button { showAddSheet = true } label: { Image(systemName: "plus") }
+                            .accessibilityLabel("Ajouter une carte")
+                            .disabled(isSelectionMode)
                     }
                 }
                 .onChange(of: groupBy) { _, _ in
                     persistUIState()
                     rebuildExpandedKeys()
                 }
-                .onChange(of: sectionSort) { _, _ in
-                    persistUIState()
-                }
+                .onChange(of: sectionSort) { _, _ in persistUIState() }
                 .onChange(of: searchText) { _, _ in
                     persistUIState()
                     if groupBy != .none { rebuildExpandedKeys() }
+                    if isSelectionMode { pruneSelection(visibleItems: filteredSortedAndFilteredCards) }
                 }
-                .onChange(of: viewMode) { _, _ in
-                    persistUIState()
-                }
+                .onChange(of: viewMode) { _, _ in persistUIState() }
                 .onChange(of: sort) { _, _ in
                     persistUIState()
+                    if isSelectionMode { pruneSelection(visibleItems: filteredSortedAndFilteredCards) }
                 }
                 .onChange(of: filter) { _, _ in
                     persistUIState()
+                    if isSelectionMode { pruneSelection(visibleItems: filteredSortedAndFilteredCards) }
                 }
-                .sheet(isPresented: $showAddSheet) {
-                    AddCardView()
-                }
-                // ✅ Quick Edit sheet
-                .sheet(item: $quickEditCard) { card in
-                    CardQuickEditView(card: card)
-                }
+                .sheet(isPresented: $showAddSheet) { AddCardView() }
+                .sheet(item: $quickEditCard) { card in CardQuickEditView(card: card) }
                 .alert("Erreur", isPresented: Binding(
                     get: { uiErrorText != nil },
                     set: { if !$0 { uiErrorText = nil } }
@@ -368,10 +472,137 @@ struct ContentView: View {
         }
         .onAppear {
             restoreUIState()
-            if groupBy != .none {
-                rebuildExpandedKeys()
+            if groupBy != .none { rebuildExpandedKeys() }
+        }
+    }
+
+    // MARK: - ✅ Long press => selection mode + check + haptics
+
+    private func startSelectionAndSelect(_ card: CardItem) {
+        if !isSelectionMode {
+            isSelectionMode = true
+            selectedIds = [card.id]
+            Haptics.selectionStart()
+        } else {
+            if selectedIds.contains(card.id) {
+                selectedIds.remove(card.id)
+                Haptics.selectionToggleOff()
+            } else {
+                selectedIds.insert(card.id)
+                Haptics.selectionToggleOn()
             }
         }
+    }
+
+    // MARK: - Multi-selection
+
+    private func enterSelectionMode() {
+        isSelectionMode = true
+        selectedIds = []
+        Haptics.selectionStart()
+    }
+
+    private func exitSelectionMode() {
+        isSelectionMode = false
+        selectedIds = []
+        Haptics.light()
+    }
+
+    private func toggleSelected(_ card: CardItem) {
+        if selectedIds.contains(card.id) {
+            selectedIds.remove(card.id)
+            Haptics.selectionToggleOff()
+        } else {
+            selectedIds.insert(card.id)
+            Haptics.selectionToggleOn()
+        }
+    }
+
+    private func isSelected(_ card: CardItem) -> Bool { selectedIds.contains(card.id) }
+
+    private func pruneSelection(visibleItems: [CardItem]) {
+        let visible = Set(visibleItems.map { $0.id })
+        selectedIds = selectedIds.intersection(visible)
+    }
+
+    private func selectAllVisible(_ visibleItems: [CardItem]) {
+        selectedIds = Set(visibleItems.map { $0.id })
+        Haptics.medium()
+    }
+
+    private func clearSelection() {
+        selectedIds.removeAll()
+        Haptics.light()
+    }
+
+    // MARK: - ✅ Batch quantity actions
+
+    private func incrementSelectedQuantity(in currentItems: [CardItem]) {
+        guard !selectedIds.isEmpty else { return }
+        let ids = selectedIds
+        for c in currentItems where ids.contains(c.id) {
+            QuantityStore.increment(id: c.id, by: 1)
+        }
+        quantityTick += 1
+        Haptics.success()
+    }
+
+    private func decrementSelectedQuantity(in currentItems: [CardItem]) {
+        guard !selectedIds.isEmpty else { return }
+        let ids = selectedIds
+        for c in currentItems where ids.contains(c.id) {
+            QuantityStore.decrement(id: c.id, by: 1) // clamp min=1
+        }
+        quantityTick += 1
+        Haptics.success()
+    }
+
+    // MARK: - Favorites
+
+    private func favoriteSelected(in currentItems: [CardItem]) {
+        guard !selectedIds.isEmpty else { return }
+        let ids = selectedIds
+        for c in currentItems where ids.contains(c.id) { FavoritesStore.set(true, id: c.id) }
+        favoritesTick += 1
+        Haptics.success()
+        exitSelectionMode()
+    }
+
+    private func unfavoriteSelected(in currentItems: [CardItem]) {
+        guard !selectedIds.isEmpty else { return }
+        let ids = selectedIds
+        for c in currentItems where ids.contains(c.id) { FavoritesStore.set(false, id: c.id) }
+        favoritesTick += 1
+        Haptics.success()
+        exitSelectionMode()
+    }
+
+    private func confirmDeleteSelected(in currentItems: [CardItem]) {
+        guard !selectedIds.isEmpty else { return }
+        let ids = selectedIds
+        pendingDeleteItems = currentItems.filter { ids.contains($0.id) }
+        Haptics.warning()
+        showDeleteConfirm = true
+    }
+
+    private func toggleFavorite(_ card: CardItem) {
+        FavoritesStore.toggle(id: card.id)
+        favoritesTick += 1
+        Haptics.light()
+    }
+
+    private func isFavorite(_ card: CardItem) -> Bool {
+        FavoritesStore.isFavorite(id: card.id)
+    }
+
+    // ✅ Quantité helpers
+
+    private func quantity(_ card: CardItem) -> Int {
+        QuantityStore.quantity(id: card.id)
+    }
+
+    private func totalCopiesCount(of items: [CardItem]) -> Int {
+        items.reduce(0) { $0 + QuantityStore.quantity(id: $1.id) }
     }
 
     // MARK: - Persist / Restore
@@ -387,12 +618,11 @@ struct ContentView: View {
 
     private func restoreUIState() {
         searchText = storedSearchText
-
-        if let m = ViewMode(rawValue: storedViewModeRaw) { viewMode = m } else { viewMode = .grid }
-        if let s = SortOption(rawValue: storedSortRaw) { sort = s } else { sort = .newest }
-        if let f = FilterOption(rawValue: storedFilterRaw) { filter = f } else { filter = .all }
-        if let g = GroupByOption(rawValue: storedGroupByRaw) { groupBy = g } else { groupBy = .none }
-        if let ss = SectionSortOption(rawValue: storedSectionSortRaw) { sectionSort = ss } else { sectionSort = .valueHigh }
+        viewMode = ViewMode(rawValue: storedViewModeRaw) ?? .grid
+        sort = SortOption(rawValue: storedSortRaw) ?? .newest
+        filter = FilterOption(rawValue: storedFilterRaw) ?? .all
+        groupBy = GroupByOption(rawValue: storedGroupByRaw) ?? .none
+        sectionSort = SectionSortOption(rawValue: storedSectionSortRaw) ?? .valueHigh
     }
 
     // MARK: - Grid (normal)
@@ -408,26 +638,51 @@ struct ContentView: View {
                 spacing: 10
             ) {
                 ForEach(items) { card in
-                    NavigationLink {
-                        CardDetailView(card: card)
-                    } label: {
-                        CollectionGridCard(card: card)
-                    }
-                    .buttonStyle(GridPressableLinkStyle())
-                    .contextMenu {
-                        Button {
-                            quickEditCard = card
+                    if isSelectionMode {
+                        CollectionGridCard(
+                            card: card,
+                            quantity: quantity(card),
+                            isFavorite: isFavorite(card),
+                            onToggleFavorite: { toggleFavorite(card) },
+                            isSelected: isSelected(card),
+                            selectionMode: true,
+                            onToggleSelection: { toggleSelected(card) }
+                        )
+                    } else {
+                        NavigationLink {
+                            CardDetailView(card: card)
                         } label: {
-                            Label("Modifier", systemImage: "pencil")
+                            CollectionGridCard(
+                                card: card,
+                                quantity: quantity(card),
+                                isFavorite: isFavorite(card),
+                                onToggleFavorite: { toggleFavorite(card) },
+                                isSelected: false,
+                                selectionMode: false,
+                                onToggleSelection: {}
+                            )
                         }
-
-                        Divider()
-
-                        Button(role: .destructive) {
-                            pendingDeleteItems = [card]
-                            showDeleteConfirm = true
-                        } label: {
-                            Label("Supprimer", systemImage: "trash")
+                        .buttonStyle(GridPressableLinkStyle())
+                        .simultaneousGesture(
+                            LongPressGesture(minimumDuration: 0.35)
+                                .onEnded { _ in startSelectionAndSelect(card) }
+                        )
+                        .contextMenu {
+                            Button { toggleFavorite(card) } label: {
+                                Label(isFavorite(card) ? "Retirer des favoris" : "Ajouter aux favoris",
+                                      systemImage: isFavorite(card) ? "star.slash" : "star")
+                            }
+                            Button { quickEditCard = card } label: {
+                                Label("Modifier", systemImage: "pencil")
+                            }
+                            Divider()
+                            Button(role: .destructive) {
+                                pendingDeleteItems = [card]
+                                showDeleteConfirm = true
+                                Haptics.warning()
+                            } label: {
+                                Label("Supprimer", systemImage: "trash")
+                            }
                         }
                     }
                 }
@@ -443,37 +698,69 @@ struct ContentView: View {
     private func collectionList(_ items: [CardItem]) -> some View {
         List {
             ForEach(items) { card in
-                NavigationLink {
-                    CardDetailView(card: card)
-                } label: {
-                    CollectionListRow(card: card)
-                }
-                .buttonStyle(ListPressableLinkStyle())
-                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-                .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                    Button {
-                        quickEditCard = card
+                if isSelectionMode {
+                    CollectionListRow(
+                        card: card,
+                        quantity: quantity(card),
+                        isFavorite: isFavorite(card),
+                        onToggleFavorite: { toggleFavorite(card) },
+                        isSelected: isSelected(card),
+                        selectionMode: true,
+                        onToggleSelection: { toggleSelected(card) }
+                    )
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                } else {
+                    NavigationLink {
+                        CardDetailView(card: card)
                     } label: {
-                        Label("Modifier", systemImage: "pencil")
+                        CollectionListRow(
+                            card: card,
+                            quantity: quantity(card),
+                            isFavorite: isFavorite(card),
+                            onToggleFavorite: { toggleFavorite(card) },
+                            isSelected: false,
+                            selectionMode: false,
+                            onToggleSelection: {}
+                        )
                     }
-                    .tint(.blue)
-                }
-                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                    Button(role: .destructive) {
-                        pendingDeleteItems = [card]
-                        showDeleteConfirm = true
-                    } label: {
-                        Label("Supprimer", systemImage: "trash")
+                    .buttonStyle(ListPressableLinkStyle())
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                    .simultaneousGesture(
+                        LongPressGesture(minimumDuration: 0.35)
+                            .onEnded { _ in startSelectionAndSelect(card) }
+                    )
+                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                        Button { quickEditCard = card } label: {
+                            Label("Modifier", systemImage: "pencil")
+                        }
+                        .tint(.blue)
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button { toggleFavorite(card) } label: {
+                            Label(isFavorite(card) ? "Unfavorite" : "Favori",
+                                  systemImage: isFavorite(card) ? "star.slash" : "star.fill")
+                        }
+                        .tint(.yellow)
+
+                        Button(role: .destructive) {
+                            pendingDeleteItems = [card]
+                            showDeleteConfirm = true
+                            Haptics.warning()
+                        } label: {
+                            Label("Supprimer", systemImage: "trash")
+                        }
                     }
                 }
             }
             .onDelete { offsets in
+                guard !isSelectionMode else { return }
                 let toDelete = offsets.compactMap { idx in
                     items.indices.contains(idx) ? items[idx] : nil
                 }
                 guard !toDelete.isEmpty else { return }
                 pendingDeleteItems = toDelete
                 showDeleteConfirm = true
+                Haptics.warning()
             }
         }
         .listStyle(.plain)
@@ -500,26 +787,51 @@ struct ContentView: View {
                             spacing: 10
                         ) {
                             ForEach(section.items) { card in
-                                NavigationLink {
-                                    CardDetailView(card: card)
-                                } label: {
-                                    CollectionGridCard(card: card)
-                                }
-                                .buttonStyle(GridPressableLinkStyle())
-                                .contextMenu {
-                                    Button {
-                                        quickEditCard = card
+                                if isSelectionMode {
+                                    CollectionGridCard(
+                                        card: card,
+                                        quantity: quantity(card),
+                                        isFavorite: isFavorite(card),
+                                        onToggleFavorite: { toggleFavorite(card) },
+                                        isSelected: isSelected(card),
+                                        selectionMode: true,
+                                        onToggleSelection: { toggleSelected(card) }
+                                    )
+                                } else {
+                                    NavigationLink {
+                                        CardDetailView(card: card)
                                     } label: {
-                                        Label("Modifier", systemImage: "pencil")
+                                        CollectionGridCard(
+                                            card: card,
+                                            quantity: quantity(card),
+                                            isFavorite: isFavorite(card),
+                                            onToggleFavorite: { toggleFavorite(card) },
+                                            isSelected: false,
+                                            selectionMode: false,
+                                            onToggleSelection: {}
+                                        )
                                     }
-
-                                    Divider()
-
-                                    Button(role: .destructive) {
-                                        pendingDeleteItems = [card]
-                                        showDeleteConfirm = true
-                                    } label: {
-                                        Label("Supprimer", systemImage: "trash")
+                                    .buttonStyle(GridPressableLinkStyle())
+                                    .simultaneousGesture(
+                                        LongPressGesture(minimumDuration: 0.35)
+                                            .onEnded { _ in startSelectionAndSelect(card) }
+                                    )
+                                    .contextMenu {
+                                        Button { toggleFavorite(card) } label: {
+                                            Label(isFavorite(card) ? "Retirer des favoris" : "Ajouter aux favoris",
+                                                  systemImage: isFavorite(card) ? "star.slash" : "star")
+                                        }
+                                        Button { quickEditCard = card } label: {
+                                            Label("Modifier", systemImage: "pencil")
+                                        }
+                                        Divider()
+                                        Button(role: .destructive) {
+                                            pendingDeleteItems = [card]
+                                            showDeleteConfirm = true
+                                            Haptics.warning()
+                                        } label: {
+                                            Label("Supprimer", systemImage: "trash")
+                                        }
                                     }
                                 }
                             }
@@ -543,43 +855,57 @@ struct ContentView: View {
                 Section {
                     if expandedSectionKeys.contains(section.key) {
                         ForEach(section.items) { card in
-                            NavigationLink {
-                                CardDetailView(card: card)
-                            } label: {
-                                CollectionListRow(card: card)
-                            }
-                            .buttonStyle(ListPressableLinkStyle())
-                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-                            .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                                Button {
-                                    quickEditCard = card
+                            if isSelectionMode {
+                                CollectionListRow(
+                                    card: card,
+                                    quantity: quantity(card),
+                                    isFavorite: isFavorite(card),
+                                    onToggleFavorite: { toggleFavorite(card) },
+                                    isSelected: isSelected(card),
+                                    selectionMode: true,
+                                    onToggleSelection: { toggleSelected(card) }
+                                )
+                                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                            } else {
+                                NavigationLink {
+                                    CardDetailView(card: card)
                                 } label: {
-                                    Label("Modifier", systemImage: "pencil")
+                                    CollectionListRow(
+                                        card: card,
+                                        quantity: quantity(card),
+                                        isFavorite: isFavorite(card),
+                                        onToggleFavorite: { toggleFavorite(card) },
+                                        isSelected: false,
+                                        selectionMode: false,
+                                        onToggleSelection: {}
+                                    )
                                 }
-                                .tint(.blue)
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button(role: .destructive) {
-                                    pendingDeleteItems = [card]
-                                    showDeleteConfirm = true
-                                } label: {
-                                    Label("Supprimer", systemImage: "trash")
+                                .buttonStyle(ListPressableLinkStyle())
+                                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                                .simultaneousGesture(
+                                    LongPressGesture(minimumDuration: 0.35)
+                                        .onEnded { _ in startSelectionAndSelect(card) }
+                                )
+                                .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                    Button { quickEditCard = card } label: {
+                                        Label("Modifier", systemImage: "pencil")
+                                    }
+                                    .tint(.blue)
                                 }
-                            }
-                            .contextMenu {
-                                Button {
-                                    quickEditCard = card
-                                } label: {
-                                    Label("Modifier", systemImage: "pencil")
-                                }
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                    Button { toggleFavorite(card) } label: {
+                                        Label(isFavorite(card) ? "Unfavorite" : "Favori",
+                                              systemImage: isFavorite(card) ? "star.slash" : "star.fill")
+                                    }
+                                    .tint(.yellow)
 
-                                Divider()
-
-                                Button(role: .destructive) {
-                                    pendingDeleteItems = [card]
-                                    showDeleteConfirm = true
-                                } label: {
-                                    Label("Supprimer", systemImage: "trash")
+                                    Button(role: .destructive) {
+                                        pendingDeleteItems = [card]
+                                        showDeleteConfirm = true
+                                        Haptics.warning()
+                                    } label: {
+                                        Label("Supprimer", systemImage: "trash")
+                                    }
                                 }
                             }
                         }
@@ -587,6 +913,7 @@ struct ContentView: View {
                 } header: {
                     Button {
                         toggleSection(section.key)
+                        Haptics.light()
                     } label: {
                         HStack(spacing: 10) {
                             Image(systemName: expandedSectionKeys.contains(section.key) ? "chevron.down" : "chevron.right")
@@ -676,11 +1003,8 @@ struct ContentView: View {
 
             switch sectionSort {
             case .valueHigh:
-                if a.totalValueCAD != b.totalValueCAD {
-                    return a.totalValueCAD > b.totalValueCAD
-                }
+                if a.totalValueCAD != b.totalValueCAD { return a.totalValueCAD > b.totalValueCAD }
                 return sortSectionKey(a.key, b.key, groupBy: groupBy)
-
             case .alphaAZ:
                 return a.key.localizedCaseInsensitiveCompare(b.key) == .orderedAscending
             case .alphaZA:
@@ -720,11 +1044,8 @@ struct ContentView: View {
     }
 
     private func toggleSection(_ key: String) {
-        if expandedSectionKeys.contains(key) {
-            expandedSectionKeys.remove(key)
-        } else {
-            expandedSectionKeys.insert(key)
-        }
+        if expandedSectionKeys.contains(key) { expandedSectionKeys.remove(key) }
+        else { expandedSectionKeys.insert(key) }
     }
 
     private func bindingForSection(_ key: String) -> Binding<Bool> {
@@ -746,8 +1067,10 @@ struct ContentView: View {
         guard !keys.isEmpty else { return }
         if keys.isSubset(of: expandedSectionKeys) {
             expandedSectionKeys.subtract(keys)
+            Haptics.light()
         } else {
             expandedSectionKeys.formUnion(keys)
+            Haptics.light()
         }
     }
 
@@ -755,7 +1078,14 @@ struct ContentView: View {
 
     private var emptyMessage: String {
         let q = searchText.trimmedLocal
-        if q.isEmpty { return "Aucune carte pour le moment. Appuie sur + pour en ajouter une." }
+        if cards.isEmpty { return "Aucune carte pour le moment. Appuie sur + pour en ajouter une." }
+
+        if q.isEmpty {
+            if filter == .all { return "Aucune carte à afficher." }
+            if filter.isMissingFieldFilter { return "Aucune carte ne correspond à “\(filter.rawValue)”. 🎉" }
+            return "Aucune carte ne correspond à ce filtre."
+        }
+
         return "Aucun résultat pour “\(q)”."
     }
 
@@ -768,23 +1098,39 @@ struct ContentView: View {
         if q.isEmpty {
             searched = cards
         } else {
-            searched = cards.filter { card in
-                searchableText(for: card).contains(q)
-            }
+            searched = cards.filter { card in searchableText(for: card).contains(q) }
         }
 
         let filtered: [CardItem] = searched.filter { card in
             switch filter {
             case .all:
                 return true
+            case .favorites:
+                return isFavorite(card)
+
             case .withValue:
                 return (card.estimatedPriceCAD ?? 0) > 0
             case .withoutValue:
                 return (card.estimatedPriceCAD ?? 0) <= 0
+
             case .withNotes:
                 return !(card.notes?.trimmedLocal.isEmpty ?? true)
             case .withoutNotes:
                 return (card.notes?.trimmedLocal.isEmpty ?? true)
+
+            // ✅ Champs manquants
+            case .missingPhoto:
+                return (card.frontImageData == nil || card.frontImageData?.isEmpty == true)
+            case .missingYear:
+                return (card.cardYear ?? "").trimmedLocal.isEmpty
+            case .missingSet:
+                return (card.setName ?? "").trimmedLocal.isEmpty
+            case .missingPlayer:
+                return (card.playerName ?? "").trimmedLocal.isEmpty
+            case .missingGrading:
+                let company = (card.gradingCompany ?? "").trimmedLocal
+                let grade = (card.gradeValue ?? "").trimmedLocal
+                return company.isEmpty || grade.isEmpty
             }
         }
 
@@ -795,24 +1141,26 @@ struct ContentView: View {
         var parts: [String] = []
         parts.append(card.title)
         if let v = card.notes { parts.append(v) }
-
         if let v = card.playerName { parts.append(v) }
         if let v = card.cardYear { parts.append(v) }
         if let v = card.companyName { parts.append(v) }
         if let v = card.setName { parts.append(v) }
         if let v = card.cardNumber { parts.append(v) }
-
         if let v = card.gradingCompany { parts.append(v) }
         if let v = card.gradeValue { parts.append(v) }
         if let v = card.certificationNumber { parts.append(v) }
-
         if let v = card.acquisitionSource { parts.append(v) }
-
         return parts.joined(separator: " ").lowercased()
     }
 
     private func sortComparator(_ a: CardItem, _ b: CardItem) -> Bool {
         switch sort {
+        case .favoritesFirst:
+            let af = isFavorite(a)
+            let bf = isFavorite(b)
+            if af != bf { return af && !bf }
+            return a.createdAt > b.createdAt
+
         case .newest:
             return a.createdAt > b.createdAt
         case .oldest:
@@ -837,29 +1185,32 @@ struct ContentView: View {
     // MARK: - Total value
 
     private func totalEstimatedValue(of items: [CardItem]) -> Double {
-        items.reduce(0) { partial, card in
-            partial + max(0, card.estimatedPriceCAD ?? 0)
-        }
+        items.reduce(0) { $0 + max(0, $1.estimatedPriceCAD ?? 0) }
     }
 
-    // MARK: - Delete (sync Marketplace)
+    // MARK: - Delete (sync Marketplace + clean favorites + quantity)
 
     private func deleteItemsNow(_ items: [CardItem]) {
         Task {
             for card in items {
-                await marketplace.endListingIfExistsForDeletedCard(
-                    cardItemId: card.id.uuidString
-                )
+                await marketplace.endListingIfExistsForDeletedCard(cardItemId: card.id.uuidString)
             }
 
             await MainActor.run {
                 for card in items {
+                    FavoritesStore.clear(id: card.id)
+                    QuantityStore.clear(id: card.id)
                     modelContext.delete(card)
                 }
                 do {
                     try modelContext.save()
+                    favoritesTick += 1
+                    quantityTick += 1
+                    Haptics.success()
+                    exitSelectionMode()
                 } catch {
                     uiErrorText = error.localizedDescription
+                    Haptics.error()
                 }
             }
         }
@@ -870,6 +1221,7 @@ struct ContentView: View {
 
 private struct CollectionMiniHeader: View {
     let count: Int
+    let totalCopies: Int
     let totalValueCAD: Double
     let hasActiveFilter: Bool
     let hasActiveSearch: Bool
@@ -880,6 +1232,8 @@ private struct CollectionMiniHeader: View {
 
     let sectionCount: Int
     let groupAllExpanded: Bool
+    let isFavoritesFilterOn: Bool
+    let missingFilterLabel: String?
     let onToggleAll: () -> Void
 
     let onReset: () -> Void
@@ -895,6 +1249,12 @@ private struct CollectionMiniHeader: View {
                     Text("\(count) carte\(count > 1 ? "s" : "")")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    if totalCopies != count {
+                        Text("\(totalCopies) exemplaire\(totalCopies > 1 ? "s" : "")")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
 
                     if totalValueCAD > 0 {
                         Text("≈ \(Money.moneyCAD(totalValueCAD))")
@@ -912,7 +1272,6 @@ private struct CollectionMiniHeader: View {
                 if isGrouped {
                     Chip(text: "Par \(groupLabel.lowercased())", systemImage: "square.grid.2x2.fill")
                     Chip(text: sectionSortLabel, systemImage: "list.bullet")
-
                     if sectionCount > 0 {
                         ToggleAllChip(
                             isExpanded: groupAllExpanded,
@@ -922,21 +1281,18 @@ private struct CollectionMiniHeader: View {
                     }
                 }
 
-                if hasActiveFilter {
-                    Chip(text: "Filtré", systemImage: "line.3.horizontal.decrease.circle.fill")
+                if let missingFilterLabel {
+                    Chip(text: missingFilterLabel, systemImage: "exclamationmark.circle")
                 }
 
-                if hasActiveSearch {
-                    Chip(text: "Recherche", systemImage: "magnifyingglass")
-                }
+                if isFavoritesFilterOn { Chip(text: "Favoris", systemImage: "star.fill") }
+                if hasActiveFilter { Chip(text: "Filtré", systemImage: "line.3.horizontal.decrease.circle.fill") }
+                if hasActiveSearch { Chip(text: "Recherche", systemImage: "magnifyingglass") }
 
-                if hasActiveFilter || hasActiveSearch || isGrouped || sortLabel != ContentView.SortOption.newest.rawValue {
-                    Button { onReset() } label: {
-                        Image(systemName: "arrow.counterclockwise")
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Réinitialiser")
+                if hasActiveFilter || hasActiveSearch || isGrouped || isFavoritesFilterOn || sortLabel != ContentView.SortOption.newest.rawValue {
+                    Button { onReset() } label: { Image(systemName: "arrow.counterclockwise") }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -955,10 +1311,7 @@ private struct CollectionMiniHeader: View {
             .foregroundStyle(.secondary)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(Color(.secondarySystemGroupedBackground))
-            )
+            .background(Capsule(style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
         }
     }
 
@@ -968,25 +1321,18 @@ private struct CollectionMiniHeader: View {
         let onTap: () -> Void
 
         var body: some View {
-            Button {
-                onTap()
-            } label: {
+            Button { onTap() } label: {
                 HStack(spacing: 6) {
                     Image(systemName: isExpanded ? "rectangle.compress.vertical" : "rectangle.expand.vertical")
-                    Text(isExpanded ? "Tout fermer (\(sectionCount))" : "Tout ouvrir (\(sectionCount))")
-                        .lineLimit(1)
+                    Text(isExpanded ? "Tout fermer (\(sectionCount))" : "Tout ouvrir (\(sectionCount))").lineLimit(1)
                 }
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(Color(.secondarySystemGroupedBackground))
-                )
+                .background(Capsule(style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(isExpanded ? "Tout fermer" : "Tout ouvrir")
         }
     }
 }
@@ -1016,10 +1362,7 @@ private struct SectionCard<Content: View>: View {
 
     var body: some View {
         VStack(spacing: 0) {
-
-            Button {
-                isExpanded.toggle()
-            } label: {
+            Button { isExpanded.toggle(); Haptics.light() } label: {
                 HStack(spacing: 10) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.caption.weight(.semibold))
@@ -1047,33 +1390,20 @@ private struct SectionCard<Content: View>: View {
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(
-                            Capsule(style: .continuous)
-                                .fill(Color(.secondarySystemGroupedBackground))
-                        )
+                        .background(Capsule(style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
-                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
             if isExpanded {
-                Divider()
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 8)
-
+                Divider().padding(.horizontal, 10).padding(.bottom, 8)
                 content
             }
         }
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.systemGroupedBackground))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.black.opacity(0.06), lineWidth: 1)
-        )
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color(.systemGroupedBackground)))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.black.opacity(0.06), lineWidth: 1))
     }
 }
 
@@ -1081,17 +1411,52 @@ private struct SectionCard<Content: View>: View {
 
 private struct CollectionGridCard: View {
     let card: CardItem
+    let quantity: Int
+
+    let isFavorite: Bool
+    let onToggleFavorite: () -> Void
+
+    let isSelected: Bool
+    let selectionMode: Bool
+    let onToggleSelection: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
 
             SlabLocalThumb(data: card.frontImageData, height: 200)
                 .overlay(alignment: .topTrailing) {
-                    if let label = card.gradingLabel {
-                        GradingOverlayBadge(label: label, compact: false)
-                            .offset(x: -4, y: 6)
-                            .padding(.trailing, 2)
+                    HStack(spacing: 6) {
+
+                        if selectionMode {
+                            Button { onToggleSelection() } label: {
+                                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                    .font(.subheadline.weight(.semibold))
+                                    .padding(8)
+                                    .background(Circle().fill(Color(.systemBackground).opacity(0.9)))
+                                    .overlay(Circle().stroke(Color.black.opacity(0.10), lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            Button { onToggleFavorite() } label: {
+                                Image(systemName: isFavorite ? "star.fill" : "star")
+                                    .font(.subheadline.weight(.semibold))
+                                    .padding(8)
+                                    .background(Circle().fill(Color(.systemBackground).opacity(0.9)))
+                                    .overlay(Circle().stroke(Color.black.opacity(0.10), lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        if quantity > 1 {
+                            QuantityBadge(qty: quantity)
+                        }
+
+                        if let label = card.gradingLabel {
+                            GradingOverlayBadge(label: label, compact: false)
+                        }
                     }
+                    .padding(.trailing, 6)
+                    .padding(.top, 6)
                 }
 
             Text(card.title)
@@ -1119,6 +1484,22 @@ private struct CollectionGridCard: View {
                 .fill(Color(.secondarySystemGroupedBackground))
         )
         .contentShape(Rectangle())
+        .onTapGesture {
+            if selectionMode { onToggleSelection() }
+        }
+    }
+
+    private struct QuantityBadge: View {
+        let qty: Int
+        var body: some View {
+            Text("x\(qty)")
+                .font(.caption2.weight(.bold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Capsule(style: .continuous).fill(Color(.systemBackground).opacity(0.9)))
+                .overlay(Capsule(style: .continuous).stroke(Color.black.opacity(0.10), lineWidth: 1))
+                .foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -1126,6 +1507,14 @@ private struct CollectionGridCard: View {
 
 private struct CollectionListRow: View {
     let card: CardItem
+    let quantity: Int
+
+    let isFavorite: Bool
+    let onToggleFavorite: () -> Void
+
+    let isSelected: Bool
+    let selectionMode: Bool
+    let onToggleSelection: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -1140,10 +1529,27 @@ private struct CollectionListRow: View {
                 }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(card.title)
-                    .font(.headline)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    Text(card.title)
+                        .font(.headline)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if quantity > 1 {
+                        Text("x\(quantity)")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Capsule(style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
+                    }
+
+                    if isFavorite && !selectionMode {
+                        Image(systemName: "star.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.yellow)
+                    }
+                }
 
                 if let notes = card.notes?.trimmedLocal, !notes.isEmpty {
                     Text(notes)
@@ -1160,9 +1566,28 @@ private struct CollectionListRow: View {
             }
 
             Spacer()
+
+            if selectionMode {
+                Button { onToggleSelection() } label: {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundStyle(isSelected ? .blue : .secondary)
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button { onToggleFavorite() } label: {
+                    Image(systemName: isFavorite ? "star.fill" : "star")
+                        .font(.title3)
+                        .foregroundStyle(isFavorite ? .yellow : .secondary)
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
+        .onTapGesture {
+            if selectionMode { onToggleSelection() }
+        }
     }
 }
 
@@ -1237,6 +1662,58 @@ private enum Money {
     }
 }
 
+// MARK: - ✅ Haptics
+
+private enum Haptics {
+    static func light() {
+        let gen = UIImpactFeedbackGenerator(style: .light)
+        gen.prepare()
+        gen.impactOccurred()
+    }
+
+    static func medium() {
+        let gen = UIImpactFeedbackGenerator(style: .medium)
+        gen.prepare()
+        gen.impactOccurred()
+    }
+
+    static func selectionStart() {
+        let gen = UIImpactFeedbackGenerator(style: .medium)
+        gen.prepare()
+        gen.impactOccurred(intensity: 0.9)
+    }
+
+    static func selectionToggleOn() {
+        let gen = UIImpactFeedbackGenerator(style: .light)
+        gen.prepare()
+        gen.impactOccurred(intensity: 0.8)
+    }
+
+    static func selectionToggleOff() {
+        let gen = UIImpactFeedbackGenerator(style: .light)
+        gen.prepare()
+        gen.impactOccurred(intensity: 0.6)
+    }
+
+    static func success() {
+        let gen = UINotificationFeedbackGenerator()
+        gen.prepare()
+        gen.notificationOccurred(.success)
+    }
+
+    static func warning() {
+        let gen = UINotificationFeedbackGenerator()
+        gen.prepare()
+        gen.notificationOccurred(.warning)
+    }
+
+    static func error() {
+        let gen = UINotificationFeedbackGenerator()
+        gen.prepare()
+        gen.notificationOccurred(.error)
+    }
+}
+
 // MARK: - Helpers
 
 private extension String {
@@ -1244,4 +1721,3 @@ private extension String {
         trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
-

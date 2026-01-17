@@ -17,10 +17,6 @@ extension MarketplaceRepository {
         onError: @escaping (Error) -> Void
     ) -> ListenerRegistration {
 
-        let db = Firestore.firestore()
-
-        // ✅ Trie par updatedAt (réel) puis createdAt (fallback)
-        // ⚠️ Requiert un index composite: sellerId + updatedAt DESC (+ createdAt DESC)
         let q = db.collection("listings")
             .whereField("sellerId", isEqualTo: sellerId)
             .order(by: "updatedAt", descending: true)
@@ -36,7 +32,6 @@ extension MarketplaceRepository {
     }
 
     /// ✅ Mes enchères (MVP) = lastBidderId == userId
-    /// Remarque: ça montre les enchères où TU es actuellement le dernier.
     func listenMyBidListings(
         bidderId: String,
         limit: Int = 200,
@@ -44,10 +39,6 @@ extension MarketplaceRepository {
         onError: @escaping (Error) -> Void
     ) -> ListenerRegistration {
 
-        let db = Firestore.firestore()
-
-        // ✅ Trie par updatedAt (réel) puis createdAt (fallback)
-        // ⚠️ Index composite: type + lastBidderId + updatedAt DESC (+ createdAt DESC)
         let q = db.collection("listings")
             .whereField("type", isEqualTo: "auction")
             .whereField("lastBidderId", isEqualTo: bidderId)
@@ -63,4 +54,3 @@ extension MarketplaceRepository {
         }
     }
 }
-

@@ -10,15 +10,12 @@ import FirebaseFirestore
 
 final class MarketplaceRepository {
 
-    private let db = Firestore.firestore()
+    // ✅ IMPORTANT:
+    // "private" empêche l’accès depuis une extension dans un autre fichier.
+    // On le laisse "internal" (par défaut) pour MarketplaceRepository+MyDeals.swift.
+    let db: Firestore = Firestore.firestore()
 
     // MARK: - PUBLIC MARKETPLACE (ACTIVE ONLY)
-    //
-    // ✅ IMPORTANT:
-    // - On ne montre QUE "active"
-    // - Pas de orderBy -> pas d’index composite requis
-    // - On trie côté iPhone (createdAt desc)
-    // ✅ FIX: callbacks sur Main Thread
 
     func listenPublicActiveListings(
         limit: Int = 200,
@@ -95,8 +92,7 @@ final class MarketplaceRepository {
                 items.reserveCapacity(snap.documents.count)
 
                 for doc in snap.documents {
-                    let l = ListingCloud.fromFirestore(doc: doc)
-                    items.append(l)
+                    items.append(ListingCloud.fromFirestore(doc: doc))
                 }
 
                 items.sort { a, b in a.createdAt > b.createdAt }
@@ -110,16 +106,6 @@ final class MarketplaceRepository {
     }
 
     // MARK: - CREATE FREE LISTING (Hybrid)
-    //
-    // ✅ IMPORTANT pour tes rules:
-    // - fixedPrice: buyNowPriceCAD DOIT être number > 0
-    // - auction:
-    //   - startingBidCAD doit être number >= 0
-    //   - currentBidCAD doit être number >= startingBidCAD (donc on le met = startingBidCAD)
-    //   - endDate doit être Timestamp et > request.time + 8h (tes rules)
-    // - sellerId obligatoire
-    // - status = "active"
-    // - on évite NSNull(); on omet les champs inutiles
 
     func createFreeListing(
         title: String,
@@ -150,19 +136,14 @@ final class MarketplaceRepository {
         let cleanDesc = (descriptionText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let descOrNil: String? = cleanDesc.isEmpty ? nil : cleanDesc
 
-        let now = Date()
-        let nowTs = Timestamp(date: now)
-
-        // ✅ Pour être cohérent avec le reste du projet:
-        // même si c’est "free listing", on donne un cardItemId artificiel (string) pour éviter les soucis d’updates/immutables plus tard.
         let freeCardItemId = UUID().uuidString
 
         var data: [String: Any] = [
             "title": cleanTitle,
             "type": (type == .auction) ? "auction" : "fixedPrice",
             "status": "active",
-            "createdAt": nowTs,
-            "updatedAt": nowTs,
+            "createdAt": FieldValue.serverTimestamp(),
+            "updatedAt": FieldValue.serverTimestamp(),
             "sellerId": user.uid,
             "cardItemId": freeCardItemId,
             "bidCount": 0
@@ -171,7 +152,6 @@ final class MarketplaceRepository {
         if let descOrNil {
             data["descriptionText"] = descOrNil
         }
-        // sinon: on omet complètement descriptionText
 
         if type == .fixedPrice {
             guard let p = buyNowPriceCAD, p > 0 else {
@@ -182,9 +162,8 @@ final class MarketplaceRepository {
                 )
             }
             data["buyNowPriceCAD"] = p
-            // rien d’autre pour fixedPrice
+
         } else {
-            // auction
             guard let endDate else {
                 throw NSError(
                     domain: "MarketplaceRepository",
@@ -193,8 +172,8 @@ final class MarketplaceRepository {
                 )
             }
 
-            // Tes rules: minimum 8h strict
-            let minEnd = now.addingTimeInterval(8 * 60 * 60 + 10 * 60) // ✅ +10 min buffer anti-décalage horloge
+            let now = Date()
+            let minEnd = now.addingTimeInterval(8 * 60 * 60 + 120)
             if endDate <= minEnd {
                 throw NSError(
                     domain: "MarketplaceRepository",
@@ -212,7 +191,6 @@ final class MarketplaceRepository {
                 )
             }
 
-            // ✅ CRUCIAL: currentBidCAD DOIT être number >= startingBidCAD
             data["startingBidCAD"] = start
             data["currentBidCAD"] = start
             data["endDate"] = Timestamp(date: endDate)
@@ -221,26 +199,22 @@ final class MarketplaceRepository {
         try await db.collection("listings").addDocument(data: data)
     }
 
-    // MARK: - STATUS / DELETE
+    // MARK: - STATUS
 
     func setListingStatus(listingId: String, status: String) async throws {
         try await db.collection("listings").document(listingId).updateData([
             "status": status,
-            "updatedAt": Timestamp(date: Date())
+            "updatedAt": FieldValue.serverTimestamp()
         ])
     }
+
+    // MARK: - DELETE
 
     func deleteListing(listingId: String) async throws {
         try await db.collection("listings").document(listingId).delete()
     }
 
     // MARK: - UPDATE LISTING (Edit)
-    //
-    // ✅ Édition safe (MVP):
-    // - title, descriptionText
-    // - buyNowPriceCAD (si fixedPrice)
-    // - startingBidCAD (si auction ET bidCount == 0)
-    // - endDate NON modifiable ici
 
     func updateListing(
         listingId: String,
@@ -266,7 +240,7 @@ final class MarketplaceRepository {
 
         var data: [String: Any] = [
             "title": cleanTitle,
-            "updatedAt": Timestamp(date: Date())
+            "updatedAt": FieldValue.serverTimestamp()
         ]
 
         if let descOrNil {
@@ -279,15 +253,12 @@ final class MarketplaceRepository {
             if let p = buyNowPriceCAD, p > 0 {
                 data["buyNowPriceCAD"] = p
             } else {
-                // si tu veux interdire de retirer le prix, tu peux throw ici.
                 data["buyNowPriceCAD"] = FieldValue.delete()
             }
         } else {
-            // auction
             if bidCount == 0 {
                 if let s = startingBidCAD, s >= 0 {
                     data["startingBidCAD"] = s
-                    // ⚠️ on ne touche pas currentBidCAD ici (rules owner updates l’interdisent souvent)
                 } else {
                     data["startingBidCAD"] = FieldValue.delete()
                 }
@@ -297,4 +268,3 @@ final class MarketplaceRepository {
         try await db.collection("listings").document(listingId).updateData(data)
     }
 }
-

@@ -19,7 +19,7 @@ struct CreateListingView: View {
     private let minAuctionHours: Double = 8
     private let defaultAuctionDays: Int = 3
 
-    // ✅ NOUVEAU: minimum mise de départ
+    // ✅ Minimum mise de départ
     private let minStartingBidCAD: Double = 2
 
     @State private var type: ListingType = .fixedPrice
@@ -27,7 +27,7 @@ struct CreateListingView: View {
     @State private var descriptionText: String = ""
 
     @State private var buyNow: String = ""
-    @State private var startingBid: String = ""   // (on laisse l’utilisateur entrer)
+    @State private var startingBid: String = ""
 
     // ✅ Date/Time encan (géré via pickers custom)
     @State private var endDate: Date =
@@ -123,6 +123,19 @@ struct CreateListingView: View {
         }
     }
 
+    // ✅ UX: force la mise de départ à au moins 2 (si vide/0/1)
+    private func normalizeStartingBidIfNeeded() {
+        guard type == .auction else { return }
+        let t = startingBid.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty {
+            startingBid = String(Int(minStartingBidCAD))
+            return
+        }
+        if let v = toDouble(t), v < minStartingBidCAD {
+            startingBid = String(Int(minStartingBidCAD))
+        }
+    }
+
     var body: some View {
         Form {
 
@@ -157,10 +170,7 @@ struct CreateListingView: View {
                 .pickerStyle(.segmented)
                 .onChange(of: type) { _, _ in
                     ensureAuctionEndDateIsValidIfNeeded()
-                    // Petit coup de pouce UX: si encan et champ vide, on suggère 2$
-                    if type == .auction, startingBid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        startingBid = "2"
-                    }
+                    if type == .auction { normalizeStartingBidIfNeeded() }
                 }
             }
 
@@ -239,6 +249,10 @@ struct CreateListingView: View {
 
                     TextField("Mise de départ (CAD)", text: $startingBid)
                         .keyboardType(.decimalPad)
+                        .onChange(of: startingBid) { _, _ in
+                            // ✅ si l’utilisateur entre 0/1, on corrige à 2
+                            normalizeStartingBidIfNeeded()
+                        }
 
                     Text("Minimum: \(Int(minStartingBidCAD)) $ CAD")
                         .font(.footnote)
@@ -344,21 +358,21 @@ struct CreateListingView: View {
             if title.isEmpty, let t = linkedCardTitle { title = t }
             if title.count > maxTitleLength { title = String(title.prefix(maxTitleLength)) }
 
+            // defaults
+            if type == .auction, startingBid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                startingBid = String(Int(minStartingBidCAD))
+            }
+
             setEndDate(endDate)
             ensureAuctionEndDateIsValidIfNeeded()
             setEndDate(endDate)
-
-            if type == .auction, startingBid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                startingBid = "2"
-            }
+            normalizeStartingBidIfNeeded()
         }
         .onChange(of: type) { _, _ in
             if type == .auction {
                 ensureAuctionEndDateIsValidIfNeeded()
                 setEndDate(endDate)
-                if startingBid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    startingBid = "2"
-                }
+                normalizeStartingBidIfNeeded()
             }
         }
     }
@@ -367,6 +381,7 @@ struct CreateListingView: View {
 
     private func publishToCloud() {
         errorText = nil
+        normalizeStartingBidIfNeeded()
 
         let finalTitle = cleanTitle
         if finalTitle.isEmpty {
@@ -386,6 +401,7 @@ struct CreateListingView: View {
         } else {
             guard let start = toDouble(startingBid) else {
                 errorText = "Entre une mise de départ valide (ex: 2)."
+                startingBid = String(Int(minStartingBidCAD))
                 return
             }
             guard start >= minStartingBidCAD else {

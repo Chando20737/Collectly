@@ -7,6 +7,7 @@
 import SwiftUI
 import SwiftData
 import UIKit
+import PhotosUI
 import FirebaseAuth
 import FirebaseFirestore
 
@@ -90,20 +91,7 @@ struct CardDetailView: View {
                 }
             }
 
-            // ✅ ACQUISITION
-            Section("Acquisition") {
-                LabeledContent("Date d’acquisition") {
-                    Text(acquisitionDateText).foregroundStyle(.secondary)
-                }
-                LabeledContent("Source") {
-                    Text(card.acquisitionSource.cleanOrDash).foregroundStyle(.secondary)
-                }
-                LabeledContent("Prix payé") {
-                    Text(purchasePriceText).foregroundStyle(.secondary)
-                }
-            }
-
-            // ✅ VALEUR ESTIMÉE (avec décimales)
+            // ✅ VALEUR ESTIMÉE
             Section("Valeur estimée") {
                 HStack {
                     TextField("Ex: 4.50", text: $priceText)
@@ -136,6 +124,7 @@ struct CardDetailView: View {
                 if Auth.auth().currentUser == nil {
                     Text("Connecte-toi pour mettre en vente.")
                         .foregroundStyle(.secondary)
+
                 } else if let listing {
                     HStack {
                         Text("Statut")
@@ -200,7 +189,7 @@ struct CardDetailView: View {
                 }
                 .disabled(Auth.auth().currentUser == nil || isWorking || isUpdatingStatus)
 
-                // ✅ PATCH UI: Pause / Publish pour prix fixe
+                // ✅ Pause / Publish pour prix fixe
                 if let listing,
                    listing.type == "fixedPrice",
                    (listing.status == "active" || listing.status == "paused") {
@@ -212,6 +201,7 @@ struct CardDetailView: View {
                             Label(isUpdatingStatus ? "Mise en pause..." : "Mettre en pause", systemImage: "pause.circle")
                         }
                         .disabled(isWorking || isUpdatingStatus)
+
                     } else if listing.status == "paused" {
                         Button {
                             Task { await updateListingStatus(newStatus: "active") }
@@ -263,6 +253,7 @@ struct CardDetailView: View {
         }
         .onDisappear { stopListingListener() }
 
+        // ✅ Sell sheet
         .sheet(isPresented: $showSellSheet) {
             CardDetailSellCardSheetView(card: card, existing: listing) { title, desc, type, buyNow, startBid, endDate in
                 Task {
@@ -278,10 +269,12 @@ struct CardDetailView: View {
             }
         }
 
+        // ✅ Edit sheet (inclut la photo)
         .sheet(isPresented: $showEditSheet) {
             EditCardDetailsSheetView(card: card)
         }
 
+        // ✅ Error alert
         .alert("Erreur", isPresented: Binding(
             get: { uiErrorText != nil },
             set: { if !$0 { uiErrorText = nil } }
@@ -291,7 +284,7 @@ struct CardDetailView: View {
             Text(uiErrorText ?? "")
         }
 
-        // ✅ ALERTE CONFIRMATION SUPPRESSION
+        // ✅ Delete confirm
         .alert("Supprimer la carte", isPresented: $showDeleteConfirm) {
             Button("Annuler", role: .cancel) {}
             Button("Supprimer", role: .destructive) {
@@ -302,26 +295,12 @@ struct CardDetailView: View {
         }
     }
 
-    // MARK: - Derived texts
-
-    private var acquisitionDateText: String {
-        guard let d = card.acquisitionDate else { return "—" }
-        return d.formatted(date: .abbreviated, time: .omitted)
-    }
-
-    private var purchasePriceText: String {
-        guard let p = card.purchasePriceCAD else { return "—" }
-        return String(format: "%.2f $ CAD", p)
-    }
-
     // MARK: - French pluralization
-
     private func miseText(_ count: Int) -> String {
         return count <= 1 ? "\(count) mise" : "\(count) mises"
     }
 
     // MARK: - Valeur estimée
-
     private func saveEstimatedPrice() {
         uiErrorText = nil
         isSavingPrice = true
@@ -360,7 +339,6 @@ struct CardDetailView: View {
     }
 
     // MARK: - UI derived
-
     private var sellButtonTitle: String {
         guard Auth.auth().currentUser != nil else { return "Mettre en vente" }
         guard let listing else { return "Mettre en vente" }
@@ -385,8 +363,7 @@ struct CardDetailView: View {
         return false
     }
 
-    // MARK: - Firestore listener (sans orderBy, pas d’index requis)
-
+    // MARK: - Firestore listener (sans orderBy -> pas d’index requis)
     private func startListingListenerIfNeeded() {
         stopListingListener()
         listingError = nil
@@ -401,30 +378,48 @@ struct CardDetailView: View {
             .limit(to: 10)
             .addSnapshotListener { snap, error in
 
-                if let ns = error as NSError? {
-                    if ns.domain == "FIRFirestoreErrorDomain" && ns.code == 7 {
-                        self.listingError = nil
+                // ✅ Si user s’est déconnecté pendant l’écoute, on nettoie
+                if Auth.auth().currentUser == nil {
+                    DispatchQueue.main.async {
                         self.listing = nil
+                        self.listingError = nil
+                    }
+                    return
+                }
+
+                if let ns = error as NSError? {
+                    // permission denied
+                    if ns.domain == "FIRFirestoreErrorDomain" && ns.code == 7 {
+                        DispatchQueue.main.async {
+                            self.listing = nil
+                            self.listingError = nil
+                        }
                         return
                     }
 
                     let msg = ns.localizedDescription
                     if msg.lowercased().contains("requires an index") {
-                        self.listingError = nil
-                        self.listing = nil
+                        DispatchQueue.main.async {
+                            self.listing = nil
+                            self.listingError = nil
+                        }
                         return
                     }
 
-                    self.listingError = msg
-                    self.listing = nil
+                    DispatchQueue.main.async {
+                        self.listingError = msg
+                        self.listing = nil
+                    }
                     return
                 }
 
                 guard let snap else { return }
 
                 if snap.documents.isEmpty {
-                    self.listing = nil
-                    self.listingError = nil
+                    DispatchQueue.main.async {
+                        self.listing = nil
+                        self.listingError = nil
+                    }
                     return
                 }
 
@@ -434,12 +429,13 @@ struct CardDetailView: View {
                     return ta < tb
                 }
 
-                if let best {
-                    self.listing = CardDetailListingMini.fromFirestore(doc: best)
-                } else {
-                    self.listing = CardDetailListingMini.fromFirestore(doc: snap.documents[0])
+                let docToUse = best ?? snap.documents[0]
+                let parsed = CardDetailListingMini.fromFirestore(doc: docToUse)
+
+                DispatchQueue.main.async {
+                    self.listing = parsed
+                    self.listingError = nil
                 }
-                self.listingError = nil
             }
     }
 
@@ -449,7 +445,6 @@ struct CardDetailView: View {
     }
 
     // MARK: - Actions
-
     private func createListing(
         title: String,
         description: String?,
@@ -537,14 +532,13 @@ struct CardDetailView: View {
         do {
             try await db.collection("listings").document(listing.id).updateData([
                 "status": newStatus,
-                "updatedAt": Timestamp(date: Date())
+                "updatedAt": FieldValue.serverTimestamp()
             ])
         } catch {
             uiErrorText = error.localizedDescription
         }
     }
 
-    // ✅ FIX: Une seule fonction (plus de redeclaration)
     private func deleteCardLocallyAndEndListingIfNeeded() async {
         uiErrorText = nil
         isWorking = true
@@ -564,8 +558,7 @@ struct CardDetailView: View {
     }
 }
 
-// MARK: - ✅ Sheet: vendre / modifier la vente
-
+// MARK: - ✅ Sheet: vendre / modifier la vente (minutes :00/:15/:30/:45)
 private struct CardDetailSellCardSheetView: View {
     let card: CardItem
     let existing: CardDetailListingMini?
@@ -586,6 +579,10 @@ private struct CardDetailSellCardSheetView: View {
         }
     }
 
+    private let quarterMinutes: [Int] = [0, 15, 30, 45]
+    private let minAuctionHours: Double = 8
+    private let minStartingBidCAD: Double = 2
+
     @State private var title: String = ""
     @State private var descriptionText: String = ""
 
@@ -593,9 +590,21 @@ private struct CardDetailSellCardSheetView: View {
 
     @State private var buyNowText: String = ""
     @State private var startBidText: String = ""
+
+    // ✅ Auction end date = date + hour + quarter minutes
     @State private var endDate: Date = Date().addingTimeInterval((8 * 60 * 60) + 180)
+    @State private var endDateOnly: Date = Date()
+    @State private var endHour: Int = Calendar.current.component(.hour, from: Date())
+    @State private var endMinuteIndex: Int = 0 // 0->00, 1->15, 2->30, 3->45
 
     @State private var uiError: String? = nil
+
+    private var cleanTitle: String { title.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var cleanDesc: String { descriptionText.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private var minAuctionEndDate: Date {
+        Date().addingTimeInterval(minAuctionHours * 60 * 60)
+    }
 
     var body: some View {
         NavigationStack {
@@ -615,20 +624,80 @@ private struct CardDetailSellCardSheetView: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    .onChange(of: sellType) { _, newValue in
+                        if newValue == .auction {
+                            if startBidText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                startBidText = "2"
+                            }
+                            ensureAuctionEndDateIsValid()
+                        }
+                    }
                 }
 
                 if sellType == .fixedPrice {
                     Section("Prix fixe") {
                         TextField("Prix (ex: 25.00)", text: $buyNowText)
                             .keyboardType(.decimalPad)
+
                         Text("$ CAD")
                             .foregroundStyle(.secondary)
                     }
                 } else {
                     Section("Encan") {
-                        TextField("Mise de départ (ex: 0.00)", text: $startBidText)
+                        TextField("Mise de départ (ex: 2.00)", text: $startBidText)
                             .keyboardType(.decimalPad)
-                        DatePicker("Fin", selection: $endDate, displayedComponents: [.date, .hourAndMinute])
+
+                        Text("Minimum: \(Int(minStartingBidCAD)) $ CAD")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        DatePicker(
+                            "Fin (date)",
+                            selection: $endDateOnly,
+                            in: Calendar.current.startOfDay(for: minAuctionEndDate)...,
+                            displayedComponents: [.date]
+                        )
+                        .onChange(of: endDateOnly) { _, _ in rebuildEndDateFromPickers() }
+
+                        HStack {
+                            Text("Heure")
+                            Spacer()
+
+                            Picker("Heure", selection: $endHour) {
+                                ForEach(0..<24, id: \.self) { h in
+                                    Text(String(format: "%02d", h)).tag(h)
+                                }
+                            }
+                            .pickerStyle(.wheel)
+                            .frame(width: 90, height: 110)
+                            .clipped()
+                            .onChange(of: endHour) { _, _ in rebuildEndDateFromPickers() }
+
+                            Text(":")
+                                .font(.headline)
+                                .foregroundStyle(.secondary)
+
+                            Picker("Minutes", selection: $endMinuteIndex) {
+                                ForEach(0..<quarterMinutes.count, id: \.self) { idx in
+                                    Text(String(format: "%02d", quarterMinutes[idx])).tag(idx)
+                                }
+                            }
+                            .pickerStyle(.wheel)
+                            .frame(width: 90, height: 110)
+                            .clipped()
+                            .onChange(of: endMinuteIndex) { _, _ in rebuildEndDateFromPickers() }
+                        }
+
+                        HStack {
+                            Text("Fin")
+                            Spacer()
+                            Text(endDate.formatted(date: .abbreviated, time: .shortened))
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Text("Minimum: 8 heures à partir de maintenant.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -657,12 +726,19 @@ private struct CardDetailSellCardSheetView: View {
                     if existing.type == "auction" {
                         sellType = .auction
                         if let s = existing.startingBidCAD { startBidText = String(format: "%.2f", s) }
-                        if let e = existing.endDate { endDate = e }
+                        if let e = existing.endDate { setEndDate(e) }
                     } else {
                         sellType = .fixedPrice
                         if let p = existing.buyNowPriceCAD { buyNowText = String(format: "%.2f", p) }
                     }
+                } else {
+                    if sellType == .auction, startBidText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        startBidText = "2"
+                    }
+                    setEndDate(endDate)
                 }
+
+                ensureAuctionEndDateIsValid()
             }
         }
     }
@@ -670,18 +746,18 @@ private struct CardDetailSellCardSheetView: View {
     private func submit() {
         uiError = nil
 
-        let finalTitle = title.trimmedLocal
+        let finalTitle = cleanTitle
         if finalTitle.isEmpty {
             uiError = "Le titre est obligatoire."
             return
         }
 
-        let finalDesc = descriptionText.trimmedLocal
+        let finalDesc = cleanDesc
         let desc: String? = finalDesc.isEmpty ? nil : finalDesc
 
         switch sellType {
         case .fixedPrice:
-            let normalized = buyNowText.trimmedLocal.replacingOccurrences(of: ",", with: ".")
+            let normalized = buyNowText.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: ".")
             guard let p = Double(normalized), p > 0 else {
                 uiError = "Entre un prix valide (ex: 25.00)."
                 return
@@ -690,52 +766,138 @@ private struct CardDetailSellCardSheetView: View {
             dismiss()
 
         case .auction:
-            let normalized = startBidText.trimmedLocal.replacingOccurrences(of: ",", with: ".")
-            guard let s = Double(normalized), s >= 0 else {
-                uiError = "Entre une mise de départ valide (ex: 0.00)."
+            let normalized = startBidText.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: ".")
+            guard let s = Double(normalized), s >= minStartingBidCAD else {
+                uiError = "Mise de départ minimum: \(Int(minStartingBidCAD)) $ CAD."
+                startBidText = String(Int(minStartingBidCAD))
                 return
             }
+
+            ensureAuctionEndDateIsValid()
+
+            if endDate < minAuctionEndDate {
+                uiError = "Un encan doit durer au moins 8 heures."
+                setEndDate(minAuctionEndDate)
+                return
+            }
+
             onSubmit(finalTitle, desc, .auction, nil, s, endDate)
             dismiss()
         }
     }
+
+    // MARK: - Date helpers
+    private func roundedToQuarter(_ date: Date) -> Date {
+        let cal = Calendar.current
+        var comps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        let m = comps.minute ?? 0
+        let rounded = quarterMinutes.min(by: { abs($0 - m) < abs($1 - m) }) ?? 0
+        comps.minute = rounded
+        comps.second = 0
+        return cal.date(from: comps) ?? date
+    }
+
+    private func setEndDate(_ date: Date) {
+        let cal = Calendar.current
+        let d = roundedToQuarter(date)
+        endDate = d
+
+        endDateOnly = cal.startOfDay(for: d)
+        endHour = cal.component(.hour, from: d)
+        let m = cal.component(.minute, from: d)
+        endMinuteIndex = quarterMinutes.firstIndex(of: m) ?? 0
+    }
+
+    private func rebuildEndDateFromPickers() {
+        let cal = Calendar.current
+        let minute = quarterMinutes[safe: endMinuteIndex] ?? 0
+
+        var comps = cal.dateComponents([.year, .month, .day], from: endDateOnly)
+        comps.hour = endHour
+        comps.minute = minute
+        comps.second = 0
+
+        let rebuilt = cal.date(from: comps) ?? endDate
+        endDate = rebuilt
+
+        ensureAuctionEndDateIsValid()
+    }
+
+    private func ensureAuctionEndDateIsValid() {
+        guard sellType == .auction else { return }
+        if endDate < minAuctionEndDate {
+            setEndDate(minAuctionEndDate)
+        }
+    }
 }
 
-// MARK: - ✅ Sheet: modifier la carte
+// MARK: - Safe array access
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        guard index >= 0 && index < count else { return nil }
+        return self[index]
+    }
+}
 
+// MARK: - ✅ Sheet: modifier la carte (MAJ: photo!)
 private struct EditCardDetailsSheetView: View {
     @Bindable var card: CardItem
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
 
+    // Photo
+    @State private var selectedItem: PhotosPickerItem? = nil
+    @State private var imageData: Data? = nil
+
+    // Base
     @State private var title: String = ""
     @State private var notes: String = ""
 
+    // Fiche
     @State private var playerName: String = ""
     @State private var cardYear: String = ""
     @State private var companyName: String = ""
     @State private var setName: String = ""
     @State private var cardNumber: String = ""
 
+    // Grading
     @State private var isGraded: Bool = false
     @State private var gradingCompany: String = ""
     @State private var gradeValue: String = ""
     @State private var certificationNumber: String = ""
 
-    @State private var acquisitionSource: String = ""
-    @State private var acquisitionDate: Date = Date()
-    @State private var hasAcquisitionDate: Bool = false
-
-    @State private var purchasePriceText: String = ""
-
     @State private var uiError: String? = nil
+    @State private var isSaving = false
 
     var body: some View {
         NavigationStack {
             Form {
+
+                Section("Photo") {
+                    VStack(spacing: 12) {
+                        CardEditImagePreview(data: imageData)
+
+                        PhotosPicker(selection: $selectedItem, matching: .images) {
+                            Label(imageData == nil ? "Choisir une image" : "Changer l’image",
+                                  systemImage: "photo.on.rectangle")
+                        }
+
+                        if imageData != nil {
+                            Button(role: .destructive) {
+                                selectedItem = nil
+                                imageData = nil
+                            } label: {
+                                Label("Retirer l’image", systemImage: "trash")
+                            }
+                        }
+                    }
+                    .padding(.vertical, 6)
+                }
+
                 Section("Base") {
                     TextField("Titre", text: $title)
+
                     TextField("Notes", text: $notes, axis: .vertical)
                         .lineLimit(2...6)
                 }
@@ -755,22 +917,11 @@ private struct EditCardDetailsSheetView: View {
                         TextField("Compagnie (PSA/BGS/SGC)", text: $gradingCompany)
                         TextField("Note (ex: 10)", text: $gradeValue)
                         TextField("Certification (optionnel)", text: $certificationNumber)
+                    } else {
+                        Text("Ajoute les infos de grading si la carte est encapsulée (PSA, BGS, SGC…).")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
-                }
-
-                Section("Acquisition") {
-                    Toggle("Date d’acquisition", isOn: $hasAcquisitionDate)
-                    if hasAcquisitionDate {
-                        DatePicker("Date", selection: $acquisitionDate, displayedComponents: .date)
-                    }
-
-                    TextField("Source", text: $acquisitionSource)
-
-                    TextField("Prix payé (optionnel)", text: $purchasePriceText)
-                        .keyboardType(.decimalPad)
-
-                    Text("$ CAD")
-                        .foregroundStyle(.secondary)
                 }
 
                 if let uiError, !uiError.isEmpty {
@@ -786,14 +937,18 @@ private struct EditCardDetailsSheetView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Annuler") { dismiss() }
+                        .disabled(isSaving)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Enregistrer") { save() }
+                    Button(isSaving ? "Enregistrement..." : "Enregistrer") { save() }
+                        .disabled(isSaving)
                 }
             }
             .onAppear {
                 title = card.title
                 notes = card.notes ?? ""
+
+                imageData = card.frontImageData
 
                 playerName = card.playerName ?? ""
                 cardYear = card.cardYear ?? ""
@@ -805,26 +960,41 @@ private struct EditCardDetailsSheetView: View {
                 gradingCompany = card.gradingCompany ?? ""
                 gradeValue = card.gradeValue ?? ""
                 certificationNumber = card.certificationNumber ?? ""
+            }
+            .onChange(of: selectedItem) { _, newItem in
+                guard let newItem else { return }
+                loadImage(from: newItem)
+            }
+        }
+    }
 
-                acquisitionSource = card.acquisitionSource ?? ""
-                if let d = card.acquisitionDate {
-                    acquisitionDate = d
-                    hasAcquisitionDate = true
-                } else {
-                    hasAcquisitionDate = false
+    private func loadImage(from item: PhotosPickerItem) {
+        uiError = nil
+        Task {
+            do {
+                if let data = try await item.loadTransferable(type: Data.self) {
+                    let final = compressIfNeeded(data)
+                    await MainActor.run {
+                        self.imageData = final
+                    }
                 }
-
-                if let p = card.purchasePriceCAD {
-                    purchasePriceText = String(format: "%.2f", p)
-                } else {
-                    purchasePriceText = ""
+            } catch {
+                await MainActor.run {
+                    self.uiError = error.localizedDescription
                 }
             }
         }
     }
 
+    private func compressIfNeeded(_ data: Data) -> Data {
+        guard let ui = UIImage(data: data) else { return data }
+        return ui.jpegData(compressionQuality: 0.85) ?? data
+    }
+
     private func save() {
         uiError = nil
+        isSaving = true
+        defer { isSaving = false }
 
         let finalTitle = title.trimmedLocal
         if finalTitle.isEmpty {
@@ -835,12 +1005,17 @@ private struct EditCardDetailsSheetView: View {
         card.title = finalTitle
         card.notes = notes.trimmedLocal.isEmpty ? nil : notes.trimmedLocal
 
+        // ✅ Photo
+        card.frontImageData = imageData
+
+        // Fiche
         card.playerName = playerName.trimmedLocal.isEmpty ? nil : playerName.trimmedLocal
         card.cardYear = cardYear.trimmedLocal.isEmpty ? nil : cardYear.trimmedLocal
         card.companyName = companyName.trimmedLocal.isEmpty ? nil : companyName.trimmedLocal
         card.setName = setName.trimmedLocal.isEmpty ? nil : setName.trimmedLocal
         card.cardNumber = cardNumber.trimmedLocal.isEmpty ? nil : cardNumber.trimmedLocal
 
+        // Grading
         card.isGraded = isGraded
         if isGraded {
             card.gradingCompany = gradingCompany.trimmedLocal.isEmpty ? nil : gradingCompany.trimmedLocal
@@ -852,19 +1027,6 @@ private struct EditCardDetailsSheetView: View {
             card.certificationNumber = nil
         }
 
-        card.acquisitionSource = acquisitionSource.trimmedLocal.isEmpty ? nil : acquisitionSource.trimmedLocal
-        card.acquisitionDate = hasAcquisitionDate ? acquisitionDate : nil
-
-        let pp = purchasePriceText.trimmedLocal.replacingOccurrences(of: ",", with: ".")
-        if pp.isEmpty {
-            card.purchasePriceCAD = nil
-        } else if let v = Double(pp), v >= 0 {
-            card.purchasePriceCAD = (v * 100).rounded() / 100
-        } else {
-            uiError = "Prix payé invalide (ex: 12.50)."
-            return
-        }
-
         do {
             try modelContext.save()
             dismiss()
@@ -874,8 +1036,38 @@ private struct EditCardDetailsSheetView: View {
     }
 }
 
-// MARK: - Image locale
+private struct CardEditImagePreview: View {
+    let data: Data?
 
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+
+            if let data, let uiImage = UIImage(data: data) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .padding(10)
+            } else {
+                VStack(spacing: 10) {
+                    Image(systemName: "photo")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                    Text("Aucune image")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.black.opacity(0.10), lineWidth: 1)
+        }
+        .frame(height: 240)
+    }
+}
+
+// MARK: - Image locale
 private struct CardHeroImage: View {
     let data: Data?
 
@@ -911,7 +1103,6 @@ private struct CardHeroImage: View {
 }
 
 // MARK: - Mini listing model
-
 private struct CardDetailListingMini: Identifiable {
     let id: String
     let type: String
@@ -968,8 +1159,7 @@ private struct CardDetailListingMini: Identifiable {
     }
 }
 
-// MARK: - Helpers (fichier local)
-
+// MARK: - Helpers
 private extension String {
     var trimmedLocal: String { trimmingCharacters(in: .whitespacesAndNewlines) }
 }

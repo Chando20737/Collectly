@@ -19,6 +19,9 @@ struct ListingCloudDetailView: View {
     @State private var docListener: ListenerRegistration?
     @State private var current: ListingCloud
 
+    // ✅ Service (miser / acheter via rules-friendly writes)
+    private let marketplaceService = MarketplaceService()
+
     // Micro-UX
     @State private var toast: Toast? = nil
     @State private var isBuying: Bool = false
@@ -404,7 +407,7 @@ struct ListingCloudDetailView: View {
     }
 
     private func confirmBidFromSheet() {
-        guard let uid else { return }
+        guard uid != nil else { return }
 
         let raw = bidAmountText
             .replacingOccurrences(of: ",", with: ".")
@@ -422,25 +425,29 @@ struct ListingCloudDetailView: View {
             return
         }
 
-        // ✅ IMPORTANT: on utilise current.id (doc réel)
-        guard !current.id.isEmpty else {
+        let listingId = resolvedListingId()
+        guard !listingId.isEmpty else {
             toast = Toast(style: .error, title: "Annonce introuvable (id manquant).", systemImage: "exclamationmark.triangle.fill")
             Haptic.error()
             return
         }
 
         isBidding = true
+        Haptic.light()
 
-        placeBidTransaction(listingId: current.id, uid: uid, amount: amount) { result in
-            DispatchQueue.main.async {
-                self.isBidding = false
-                switch result {
-                case .success:
+        Task {
+            do {
+                try await marketplaceService.placeBid(listingId: listingId, bidCAD: amount)
+                await MainActor.run {
+                    self.isBidding = false
                     self.showBidSheet = false
                     self.toast = Toast(style: .success, title: "Mise envoyée ✅", systemImage: "checkmark.circle.fill")
                     Haptic.success()
-                case .failure(let err):
-                    self.toast = Toast(style: .error, title: err.localizedDescription, systemImage: "exclamationmark.triangle.fill", duration: 2.8)
+                }
+            } catch {
+                await MainActor.run {
+                    self.isBidding = false
+                    self.toast = Toast(style: .error, title: error.localizedDescription, systemImage: "exclamationmark.triangle.fill", duration: 2.8)
                     Haptic.error()
                 }
             }
@@ -448,8 +455,6 @@ struct ListingCloudDetailView: View {
     }
 
     private func buyNowTapped() {
-        guard let uid else { return }
-
         guard canBuyNow else {
             toast = Toast(style: .info, title: "Impossible d’acheter maintenant.", systemImage: "info.circle")
             Haptic.error()
@@ -462,8 +467,8 @@ struct ListingCloudDetailView: View {
             return
         }
 
-        // ✅ IMPORTANT: on utilise current.id (doc réel)
-        guard !current.id.isEmpty else {
+        let listingId = resolvedListingId()
+        guard !listingId.isEmpty else {
             toast = Toast(style: .error, title: "Annonce introuvable (id manquant).", systemImage: "exclamationmark.triangle.fill")
             Haptic.error()
             return
@@ -472,69 +477,69 @@ struct ListingCloudDetailView: View {
         isBuying = true
         Haptic.light()
 
-        buyNowTransaction(listingId: current.id, uid: uid) { result in
-            DispatchQueue.main.async {
-                self.isBuying = false
-                switch result {
-                case .success:
+        Task {
+            do {
+                try await marketplaceService.buyNow(listingId: listingId)
+                await MainActor.run {
+                    self.isBuying = false
                     self.toast = Toast(style: .success, title: "Achat réussi ✅", systemImage: "checkmark.seal.fill")
                     Haptic.success()
-                case .failure(let err):
-                    self.toast = Toast(style: .error, title: err.localizedDescription, systemImage: "exclamationmark.triangle.fill", duration: 2.8)
+                }
+            } catch {
+                await MainActor.run {
+                    self.isBuying = false
+                    self.toast = Toast(style: .error, title: error.localizedDescription, systemImage: "exclamationmark.triangle.fill", duration: 2.8)
                     Haptic.error()
                 }
             }
         }
     }
 
-    // MARK: - Firestore listener (✅ SAFE: query au lieu de document(id))
+    // MARK: - Firestore listener (document by id, avec gestion permission denied)
 
     private func startDocListener() {
         stopDocListener()
 
+        let listingId = resolvedListingId()
+        guard !listingId.isEmpty else { return }
+
         let db = Firestore.firestore()
+        let ref = db.collection(listingsCollection).document(listingId)
 
-        let sellerId = listing.sellerId
-        let cardItemId = listing.cardItemId
+        docListener = ref.addSnapshotListener { snap, err in
+            if let ns = err as NSError? {
+                // Permission denied (FIRFirestoreErrorDomain code 7)
+                if ns.domain == "FIRFirestoreErrorDomain" && ns.code == 7 {
+                    DispatchQueue.main.async {
+                        self.toast = Toast(
+                            style: .info,
+                            title: "Annonce non accessible (permissions).",
+                            systemImage: "lock.fill",
+                            duration: 2.6
+                        )
+                    }
+                    self.stopDocListener()
+                    return
+                }
 
-        // ✅ Query: 0 résultat = pas d’erreur permissions
-        let q = db.collection(listingsCollection)
-            .whereField("sellerId", isEqualTo: sellerId)
-            .whereField("cardItemId", isEqualTo: cardItemId)
-            .limit(to: 25)
-
-        docListener = q.addSnapshotListener { snap, err in
-            if let err {
                 DispatchQueue.main.async {
-                    self.toast = Toast(style: .error, title: err.localizedDescription, systemImage: "exclamationmark.triangle.fill")
+                    self.toast = Toast(style: .error, title: ns.localizedDescription, systemImage: "exclamationmark.triangle.fill", duration: 2.8)
                 }
                 return
             }
 
             guard let snap else { return }
 
-            // 0 doc => annonce disparue / terminée / supprimée / id incorrect
-            if snap.documents.isEmpty {
+            if !snap.exists {
                 DispatchQueue.main.async {
-                    self.toast = Toast(style: .info, title: "Annonce introuvable ou non accessible.", systemImage: "info.circle", duration: 2.6)
+                    self.toast = Toast(style: .info, title: "Annonce introuvable.", systemImage: "info.circle", duration: 2.2)
                 }
                 return
             }
 
-            var items: [ListingCloud] = []
-            items.reserveCapacity(snap.documents.count)
-
-            for doc in snap.documents {
-                items.append(ListingCloud.fromFirestore(doc: doc))
-            }
-
-            // on prend la plus récente (createdAt desc)
-            items.sort { a, b in a.createdAt > b.createdAt }
-
-            if let best = items.first {
-                DispatchQueue.main.async {
-                    self.current = best
-                }
+            let fresh = ListingCloud.fromFirestore(doc: snap)
+            DispatchQueue.main.async {
+                self.current = fresh
             }
         }
     }
@@ -544,128 +549,11 @@ struct ListingCloudDetailView: View {
         docListener = nil
     }
 
-    // MARK: - Firestore transactions
-
-    private func placeBidTransaction(listingId: String, uid: String, amount: Double, completion: @escaping (Result<Void, Error>) -> Void) {
-        let db = Firestore.firestore()
-        let ref = db.collection(listingsCollection).document(listingId)
-
-        db.runTransaction({ txn, errPtr -> Any? in
-            do {
-                let snap = try txn.getDocument(ref)
-
-                guard let data = snap.data() else {
-                    errPtr?.pointee = NSError(domain: "Collectly", code: 404, userInfo: [NSLocalizedDescriptionKey: "Annonce introuvable."])
-                    return nil
-                }
-
-                let status = (data["status"] as? String) ?? "active"
-                let type = (data["type"] as? String) ?? "auction"
-
-                guard status == "active" else {
-                    errPtr?.pointee = NSError(domain: "Collectly", code: 400, userInfo: [NSLocalizedDescriptionKey: "Annonce non active."])
-                    return nil
-                }
-                guard type == "auction" else {
-                    errPtr?.pointee = NSError(domain: "Collectly", code: 400, userInfo: [NSLocalizedDescriptionKey: "Ce n’est pas un encan."])
-                    return nil
-                }
-
-                if let ts = data["endDate"] as? Timestamp {
-                    let end = ts.dateValue()
-                    guard end > Date() else {
-                        errPtr?.pointee = NSError(domain: "Collectly", code: 400, userInfo: [NSLocalizedDescriptionKey: "Encan terminé."])
-                        return nil
-                    }
-                }
-
-                let current = (data["currentBidCAD"] as? Double)
-                    ?? (data["startingBidCAD"] as? Double)
-                    ?? 0
-
-                let minNext = max(current + minBidIncrement, minBidIncrement)
-
-                guard amount >= minNext else {
-                    errPtr?.pointee = NSError(domain: "Collectly", code: 400, userInfo: [NSLocalizedDescriptionKey: "Mise trop basse (min \(Int(minNext))$)."])
-                    return nil
-                }
-
-                let bidCount = (data["bidCount"] as? Int) ?? 0
-
-                txn.updateData([
-                    "currentBidCAD": amount,
-                    "bidCount": bidCount + 1,
-                    "lastBidderId": uid,
-                    "updatedAt": Timestamp(date: Date())
-                ], forDocument: ref)
-
-                return nil
-            } catch {
-                errPtr?.pointee = error as NSError
-                return nil
-            }
-        }, completion: { _, error in
-            if let error { completion(.failure(error)) }
-            else { completion(.success(())) }
-        })
-    }
-
-    private func buyNowTransaction(listingId: String, uid: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        let db = Firestore.firestore()
-        let ref = db.collection(listingsCollection).document(listingId)
-
-        db.runTransaction({ txn, errPtr -> Any? in
-            do {
-                let snap = try txn.getDocument(ref)
-
-                guard let data = snap.data() else {
-                    errPtr?.pointee = NSError(domain: "Collectly", code: 404, userInfo: [NSLocalizedDescriptionKey: "Annonce introuvable."])
-                    return nil
-                }
-
-                let status = (data["status"] as? String) ?? "active"
-                guard status == "active" else {
-                    errPtr?.pointee = NSError(domain: "Collectly", code: 400, userInfo: [NSLocalizedDescriptionKey: "Annonce non active."])
-                    return nil
-                }
-
-                if let ts = data["endDate"] as? Timestamp {
-                    let end = ts.dateValue()
-                    guard end > Date() else {
-                        errPtr?.pointee = NSError(domain: "Collectly", code: 400, userInfo: [NSLocalizedDescriptionKey: "Annonce terminée."])
-                        return nil
-                    }
-                }
-
-                let price = (data["buyNowPriceCAD"] as? Double) ?? 0
-                guard price > 0 else {
-                    errPtr?.pointee = NSError(domain: "Collectly", code: 400, userInfo: [NSLocalizedDescriptionKey: "Prix d’achat non défini."])
-                    return nil
-                }
-
-                let sellerId = (data["sellerId"] as? String) ?? ""
-                guard sellerId != uid else {
-                    errPtr?.pointee = NSError(domain: "Collectly", code: 400, userInfo: [NSLocalizedDescriptionKey: "Tu ne peux pas acheter ta propre annonce."])
-                    return nil
-                }
-
-                txn.updateData([
-                    "status": "sold",
-                    "buyerId": uid,
-                    "soldAt": Timestamp(date: Date()),
-                    "finalPriceCAD": price,
-                    "updatedAt": Timestamp(date: Date())
-                ], forDocument: ref)
-
-                return nil
-            } catch {
-                errPtr?.pointee = error as NSError
-                return nil
-            }
-        }, completion: { _, error in
-            if let error { completion(.failure(error)) }
-            else { completion(.success(())) }
-        })
+    private func resolvedListingId() -> String {
+        // priorité à current.id si déjà “live”
+        if !current.id.isEmpty { return current.id }
+        if !listing.id.isEmpty { return listing.id }
+        return ""
     }
 
     // MARK: - Helpers
@@ -858,4 +746,5 @@ private struct EndingSoonOrRemainingChip: View {
         return "\(m)m"
     }
 }
+
 

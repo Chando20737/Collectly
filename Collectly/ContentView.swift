@@ -231,6 +231,28 @@ private struct CVCollectionHomeView: View {
 
     // MARK: - Models helpers
 
+
+    private func displayTitle(for card: CardItem) -> String {
+        let p = (card.playerName ?? "").trimmedLocal
+        if !p.isEmpty { return p }
+        // fallback
+        let t = card.title.trimmedLocal
+        return t.isEmpty ? "—" : t
+    }
+
+    private func displaySubtitle(for card: CardItem) -> String? {
+        // Prefer set (ex: "Series 2 - Young Guns")
+        let setName = (card.setName ?? "").trimmedLocal
+        if !setName.isEmpty { return setName }
+
+        // Fallbacks (useful if set is missing)
+        let year = (card.cardYear ?? "").trimmedLocal
+        if !year.isEmpty { return year }
+
+        if let g = gradingLabel(for: card) { return g }
+        return nil
+    }
+
     private func gradingLabel(for card: CardItem) -> String? {
         let company = (card.gradingCompany ?? "").trimmedLocal
         let grade = (card.gradeValue ?? "").trimmedLocal
@@ -1261,17 +1283,12 @@ private var uiErrorPresented: Binding<Bool> {
                 }
                 .padding(.bottom, 2)
 
-                Text(card.title)
+                Text(displayTitle(for: card))
                     .font(.headline)
                     .lineLimit(2)
 
-                if let player = card.playerName?.trimmedLocal, !player.isEmpty {
-                    Text(player)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                } else if let label = gradingLabel(for: card) {
-                    Text(label)
+                if let subtitle = displaySubtitle(for: card) {
+                    Text(subtitle)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -1335,26 +1352,16 @@ private var uiErrorPresented: Binding<Bool> {
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(card.title)
+                    Text(displayTitle(for: card))
                         .font(.headline)
                         .lineLimit(2)
 
-                    if let player = card.playerName?.trimmedLocal, !player.isEmpty {
-                        Text(player)
-                    } else if let label = gradingLabel(for: card) {
-                        Text(label)
+                    if let subtitle = displaySubtitle(for: card) {
+                        Text(subtitle)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
-
-                    HStack(spacing: 8) {
-                        if let year = card.cardYear?.trimmedLocal, !year.isEmpty {
-                            Text(year)
-                        }
-                        if let setName = card.setName?.trimmedLocal, !setName.isEmpty {
-                            Text(setName)
-                        }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 }
 
                 Spacer()

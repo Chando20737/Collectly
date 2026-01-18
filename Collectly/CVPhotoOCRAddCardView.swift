@@ -8,7 +8,7 @@
 import SwiftUI
 import SwiftData
 import UIKit
-import Vision
+@preconcurrency import Vision
 import AVFoundation
 import CoreImage
 import CoreImage.CIFilterBuiltins
@@ -486,10 +486,8 @@ private enum OCR {
             }
 
             let handler = VNImageRequestHandler(cgImage: boosted, options: [:])
-            DispatchQueue.global(qos: .userInitiated).async {
-                do { try handler.perform([request]) }
-                catch { continuation.resume(returning: []) }
-            }
+            do { try handler.perform([request]) }
+            catch { continuation.resume(returning: []) }
         }
     }
 
@@ -597,12 +595,19 @@ private enum FrontOCRParser {
     }
 
     private static func bestLastName(from lines: [String]) -> String? {
-        let stop = Set(["UPPER", "DECK", "YOUNG", "GUNS", "SERIES", "ROOKIE", "RC", "NHL", "RANGERS", "NEW", "YORK", "CCM"])
-
+        let stop = Set(["UPPER", "DECK", "YOUNG", "GUNS", "...ERIES", "SERIES", "ROOKIE", "RC", "NHL",
+                        "CARD", "TRADER", "SPORTS", "GAMES", "REMI", "RÉMI", "RÉMÍ",
+                        "RANGERS", "NEW", "YORK", "CCM"])
         var best: String? = nil
         var bestScore = -1
 
         for l in lines {
+            let lineUp = l.uppercased()
+            // Ignore store / sticker / branding lines (common false positives)
+            if lineUp.contains("CARD") && lineUp.contains("TRADER") { continue }
+            if lineUp.contains("SPORTS") && lineUp.contains("GAMES") { continue }
+            if lineUp.contains("REMICARDTRADER") || lineUp.contains("RÉMICARDTRADER") { continue }
+
             let parts = l
                 .replacingOccurrences(of: "•", with: " ")
                 .replacingOccurrences(of: "-", with: " ")
@@ -697,7 +702,9 @@ private enum BackOCRParser {
 
         // 4) Card number
         let hasYoung = upper.contains(where: { $0.contains("YOUNG") })
-        out.cardNumber = findCardNumber(in: raw, preferYoungGunsRule: hasYoung)
+        let compUp = (out.company ?? "").uppercased()
+        let isUpperDeck = compUp.contains("UPPER") || compUp.contains("DECK")
+        out.cardNumber = findCardNumber(in: raw, preferYoungGunsRule: (hasYoung || isUpperDeck))
 
         // 5) Set
         out.setName = findSet(in: upper, company: out.company, cardNumber: out.cardNumber)
@@ -715,119 +722,166 @@ private enum BackOCRParser {
     }
 
     private static func findSet(in upperLines: [String], company: String?, cardNumber: String?) -> String? {
-        let hasYoung = upperLines.contains(where: { $0.contains("YOUNG") })
-        let hasGuns = upperLines.contains(where: { $0.contains("GUN") || $0.contains("GUNS") })
-        if hasYoung && hasGuns { return "Young Guns" }
 
-        // Fallback: OCR often captures only "YOUNG".
-        // For Upper Deck Series 1/2, Young Guns are commonly numbered 201-250.
-        if hasYoung {
-            let comp = (company ?? "").uppercased()
-            if comp.contains("UPPER") || comp.contains("DECK") {
-                if let n = parseCardNumberInt(cardNumber), (201...250).contains(n) {
-                    return "Young Guns" }
+        let series = detectSeriesNumber(in: upperLines) // 1 or 2
+        let comp = (company ?? "").uppercased()
+        let isUpperDeck = comp.contains("UPPER") || comp.contains("DECK")
+
+        let joined = upperLines.joined(separator: "\n").uppercased()
+        let hasYoung = joined.contains("YOUNG")
+        let hasGuns = joined.contains("GUN") // covers GUN / GUNS
+        let hasYoungGunsText = hasYoung && hasGuns
+
+        if hasYoungGunsText {
+            if let s = series { return "Series \(s) - Young Guns" }
+            return "Young Guns"
+        }
+
+        // If OCR missed "GUNS", infer Young Guns by typical numbering ranges (Upper Deck).
+        if isUpperDeck, let n = parseCardNumberInt(cardNumber) {
+            let looksLikeYG = (201...250).contains(n) || (451...500).contains(n)
+            if looksLikeYG {
+                if let s = series { return "Series \(s) - Young Guns" }
+                return "Young Guns"
             }
+        }
+
+        return nil
+    }
+
+    private static func detectSeriesNumber(in upperLines: [String]) -> Int? {
+        let joined = upperLines.joined(separator: "\n")
+        let up = joined.uppercased()
+
+        if let s = firstRegexMatch("(?i)\\bSERIES\\s*([12])\\b", in: joined) {
+            let digit = s.filter { $0 == "1" || $0 == "2" }
+            if let d = digit.first, let v = Int(String(d)) { return v }
+        }
+
+        // OCR sometimes mangles SERIES a bit
+        if let s = firstRegexMatch("(?i)SER.{0,3}IES\\s*([12])\\b", in: joined) {
+            let digit = s.filter { $0 == "1" || $0 == "2" }
+            if let d = digit.first, let v = Int(String(d)) { return v }
+        }
+
+        if up.contains("SERIES 2") || up.contains("SERIES2") { return 2 }
+        if up.contains("SERIES 1") || up.contains("SERIES1") { return 1 }
+
+        return nil
+    }
+
+
+    private static func findSeasonYear(in lines: [String]) -> String? {
+
+        // ✅ Priority: footer line like "2024-25 UPPER DECK SERIES 2 HOCKEY"
+        // This is the card's set year, and is more reliable than the stats table "YEAR 2023-24".
+        if let y = Self.detectSeasonFromSeriesFooter(in: lines) {
+            return y
+        }
+
+        // Avoid bio/stats lines when scanning for any remaining seasons.
+        let bad = ["BORN", "BIRTH", "HEIGHT", "WEIGHT", "SHOOTS", "TEAM", "GP", "PTS", "PIM", "PPG", "YEAR"]
+        for l in lines {
+            let up = l.uppercased()
+            if bad.contains(where: { up.contains($0) }) { continue }
+            if let y = Self.firstSeasonToken(in: l) { return y }
+        }
+
+        return nil
+    }
+
+    private static func detectSeasonFromSeriesFooter(in lines: [String]) -> String? {
+        for line in lines {
+            let up = line.uppercased()
+            let hasUpperDeck = up.contains("UPPER") && up.contains("DECK")
+            let hasSeriesOrHockey = up.contains("SERIES") || up.contains("HOCKEY")
+            guard hasUpperDeck && hasSeriesOrHockey else { continue }
+
+            if let y = Self.firstSeasonToken(in: line) { return y }
         }
         return nil
     }
 
-    private static func findSeasonYear(in lines: [String]) -> String? {
-        let joined = lines.joined(separator: "\n")
-        if let s = firstRegexMatch("\\b(19|20)\\d{2}\\s*[-–/]\\s*\\d{2}\\b", in: joined) {
-            return s.replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "–", with: "-").replacingOccurrences(of: "/", with: "-")
-        }
-
-        // Avoid bio lines
-        let bad = ["BORN", "BIRTH", "HEIGHT", "WEIGHT", "SHOOTS"]
-        for l in lines {
-            let up = l.uppercased()
-            if bad.contains(where: { up.contains($0) }) { continue }
-            if let y = firstRegexMatch("\\b(19|20)\\d{2}\\b", in: up) {
-                return y
-            }
+    private static func firstSeasonToken(in line: String) -> String? {
+        // Match "2024-25" or "2024–25" or "2024/25"
+        if let s = Self.firstRegexMatch("\\b(19|20)\\d{2}\\s*[-–/]\\s*\\d{2}\\b", in: line) {
+            return s
+                .replacingOccurrences(of: " ", with: "")
+                .replacingOccurrences(of: "–", with: "-")
+                .replacingOccurrences(of: "/", with: "-")
         }
         return nil
     }
 
     private static func findCardNumber(in lines: [String], preferYoungGunsRule: Bool) -> String? {
-        // 1) Explicit #123
+        // 1) Explicit #123 (avoid grabbing addresses like #5830)
         for l in lines {
-            if let m = firstRegexMatch("#\\s*\\d{1,4}", in: l.uppercased()) {
+            let up = l.uppercased()
+            if up.contains("EL CAMINO") || up.contains("CARLSBAD") || up.contains("PRINTED") { continue }
+            if let m = firstRegexMatch("#\\s*\\d{1,3}", in: up) {
                 let digits = m.filter { $0.isNumber }
                 if !digits.isEmpty { return "#\(digits)" }
             }
         }
 
-        // 2) Standalone number candidates (common on backs)
-        //    We must avoid grabbing measurements (5'11") and stats tables.
+        // 2) Standalone number candidates (backs usually have a 1-3 digit number).
+        // Reject 4+ digit numbers (addresses/product codes) and ignore stats/bio lines.
         let badLineKeywords = [
             "HEIGHT", "WEIGHT", "SHOOTS", "BORN", "BIRTH",
-            "GP", "PTS", "PIM", "PPG", "SHG", "SOG", "+/-"
+            "GP", "PTS", "PIM", "PPG", "SHG", "SOG", "+/-", "YEAR",
+            "©", "UDC", "UPPER DECK COMPANY", "PRINTED", "RESERVED",
+            "EL CAMINO", "CARLSBAD", "CALIF", "CA"
         ]
 
-        // Look near the top (but wide enough)
-        let window = Array(lines.prefix(40))
+        let window = Array(lines.prefix(50))
 
         var candidates: [Int] = []
 
-        for idx in window.indices {
-            let rawLine = window[idx].trimmedLocal
-            if rawLine.isEmpty { continue }
-
-            let up = rawLine.uppercased()
+        for l in window {
+            let up = l.uppercased()
             if badLineKeywords.contains(where: { up.contains($0) }) { continue }
 
-            // If neighbors are bio/stats labels, skip
-            let prev = idx > 0 ? window[idx - 1].uppercased() : ""
-            let next = (idx + 1 < window.count) ? window[idx + 1].uppercased() : ""
-            if badLineKeywords.contains(where: { prev.contains($0) }) { continue }
-            if badLineKeywords.contains(where: { next.contains($0) }) { continue }
-
-            // Extract ALL 2-4 digit sequences in the line (handles "202." or "No 202")
-            let matches = regexMatches("\\b\\d{2,4}\\b", in: up)
-            if matches.isEmpty { continue }
-
-            for m in matches {
-                let digits = m
-                // Reject real years only if 4 digits and starts with 19/20
-                if digits.count == 4 && (digits.hasPrefix("19") || digits.hasPrefix("20")) {
-                    continue
-                }
-                if let v = Int(digits) {
-                    candidates.append(v)
-                }
+            // Only accept standalone 1-3 digits (optionally with a trailing dot/comma)
+            if let m = firstRegexMatch("(?i)^\\s*(\\d{1,3})\\s*[\\.,]*\\s*$", in: up) {
+                let digits = m.filter { $0.isNumber }
+                if let v = Int(digits) { candidates.append(v) }
             }
         }
 
-        guard !candidates.isEmpty else { return nil }
-
-        // ✅ Young Guns rule: if we suspect YG, card numbers are >= 200
+        // Young Guns heuristic:
+        // Series 1: 201-250
+        // Series 2: 451-500
         if preferYoungGunsRule {
-            let yg = candidates.filter { $0 >= 200 }
-            if let best = yg.sorted(by: >).first {
-                return "#\(best)"
-            }
-            return nil
+            if let best = candidates.first(where: { (201...250).contains($0) }) { return "#\(best)" }
+            if let best = candidates.first(where: { (451...500).contains($0) }) { return "#\(best)" }
         }
 
         // General: prefer >= 100 to avoid jersey numbers
         let big = candidates.filter { $0 >= 100 }
-        if let best = big.sorted(by: >).first {
-            return "#\(best)"
-        }
+        if let best = big.sorted(by: >).first { return "#\(best)" }
 
-        if let best = candidates.sorted(by: >).first {
-            return "#\(best)"
-        }
+        if let best = candidates.sorted(by: >).first { return "#\(best)" }
 
         return nil
     }
 
 
+
     private static func findFullName(in lines: [String]) -> String? {
+        // We expect the player name to be a short, 2-3 word ALL-CAPS line (e.g. "ZACHARY BOLDUC").
+        // On some photos, a shop sticker at the top (e.g. "RÉMI CARD TRADER") gets picked up first,
+        // so we aggressively exclude common shop/label words and prefer scanning from the bottom up.
+
         let badContains = [
             "TEAM", "YEAR", "HEIGHT", "WEIGHT", "SHOOTS", "BORN", "BIRTH",
             "NHL", "SEASON", "ROOKIE", "RC", "STATS", "CAREER", "BIO"
+        ]
+
+        // Common non-player words seen on stickers / shop labels
+        let bannedWords: Set<String> = [
+            "CARD", "CARDS", "TRADER", "TRADERS", "TRADING", "SPORTS", "GAMES",
+            "SHOP", "STORE", "BREAKS", "COLLECTIBLES", "COLLECTIBLE", "HOBBY",
+            "RÉMI", "REMI"
         ]
 
         let teamCityWords: Set<String> = [
@@ -838,7 +892,9 @@ private enum BackOCRParser {
             "HURRICANES", "COYOTES", "UTAH", "VEGAS", "GOLDEN", "KNIGHTS"
         ]
 
-        for l in lines {
+        // Prefer lower parts of the image (player name is usually printed near the bottom on the front,
+        // and stickers are often at the top).
+        for l in lines.reversed() {
             let up = l.uppercased()
             if badContains.contains(where: { up.contains($0) }) { continue }
 
@@ -853,9 +909,18 @@ private enum BackOCRParser {
             if parts.count < 2 || parts.count > 3 { continue }
             if parts.contains(where: { $0.count < 2 }) { continue }
             if parts.contains(where: { !$0.allSatisfy({ $0.isLetter }) }) { continue }
+
+            // Exclude shop labels (any banned word in the line)
+            if parts.contains(where: { bannedWords.contains($0) }) { continue }
+
+            // Exclude set titles that look like names (e.g. "YOUNG GUNS")
+            if parts.contains("YOUNG") && parts.contains(where: { $0.hasPrefix("GUN") }) {
+                continue
+            }
+
+            // Exclude team/city words (we want a person name, not a team)
             if parts.allSatisfy({ teamCityWords.contains($0) }) { continue }
             if parts.contains(where: { teamCityWords.contains($0) }) {
-                // allow a single team word? safer: reject
                 continue
             }
 
@@ -864,9 +929,10 @@ private enum BackOCRParser {
 
         return nil
     }
-
     private static func findLikelyLastName(in upperLines: [String]) -> String? {
-        let stop = Set(["UPPER", "DECK", "YOUNG", "GUNS", "SERIES", "ROOKIE", "RC", "NHL", "TEAM", "YEAR", "RANGERS", "NEW", "YORK", "CCM"])
+        let stop = Set(["UPPER", "DECK", "YOUNG", "GUNS", "...ERIES", "SERIES", "ROOKIE", "RC", "NHL",
+                        "CARD", "TRADER", "SPORTS", "GAMES", "REMI", "RÉMI", "RÉMÍ",
+                        "RANGERS", "NEW", "YORK", "CCM"])
         var best: String? = nil
         var bestScore = -1
 

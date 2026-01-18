@@ -5,7 +5,6 @@
 //  Created by Eric Chandonnet on 2026-01-13.
 //
 import UIKit
-import FirebaseCore
 import FirebaseMessaging
 import UserNotifications
 
@@ -16,19 +15,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil
     ) -> Bool {
 
-        // ✅ Firebase doit être configuré ici (avant Messaging/Auth/Firestore)
-        if FirebaseApp.app() == nil {
-            FirebaseApp.configure()
-        }
-
-        // ✅ Delegates (Push)
+        // Push delegates
         UNUserNotificationCenter.current().delegate = self
         Messaging.messaging().delegate = self
 
         return true
     }
 
-    // ✅ APNs token -> Firebase
+    // MARK: - APNs -> Firebase Messaging
+
     func application(
         _ application: UIApplication,
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
@@ -42,6 +37,22 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         didFailToRegisterForRemoteNotificationsWithError error: Error
     ) {
         print("❌ Failed to register for remote notifications:", error.localizedDescription)
+    }
+
+    // MARK: - IMPORTANT (sans swizzling)
+
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable : Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        // Permet à Firebase Messaging de traiter le message
+        Messaging.messaging().appDidReceiveMessage(userInfo)
+
+        // Optionnel: debug
+        print("📩 Remote notification received:", userInfo)
+
+        completionHandler(.newData)
     }
 }
 
@@ -63,7 +74,6 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         let userInfo = response.notification.request.content.userInfo
         print("📩 Notification tapped. userInfo =", userInfo)
 
-        // ✅ On forward au manager (qui forward au router)
         await MainActor.run {
             PushNotificationsManager.shared.handleNotificationTap(userInfo)
         }

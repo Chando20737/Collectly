@@ -6,14 +6,17 @@
 //
 import SwiftUI
 import SwiftData
+import FirebaseCore
+import FirebaseAppCheck
 
 @main
 struct CollectlyApp: App {
 
+    // ✅ On garde AppDelegate pour Push (APNs/FCM delegates)
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
-    @StateObject private var session = SessionStore()
-    @StateObject private var router = DeepLinkRouter()
+    @StateObject private var session: SessionStore
+    @StateObject private var router: DeepLinkRouter
 
     // ✅ Pour éviter d'exécuter 2x le setup push si onAppear est rappelé
     @State private var didSetupPush = false
@@ -43,13 +46,33 @@ struct CollectlyApp: App {
         }
     }()
 
+    init() {
+        // ✅ App Check factory AVANT FirebaseApp.configure()
+        #if DEBUG
+        AppCheck.setAppCheckProviderFactory(AppCheckDebugProviderFactory())
+        print("🟢 APP CHECK = DEBUG provider (CollectlyApp.init)")
+        #else
+        AppCheck.setAppCheckProviderFactory(AppAttestProviderFactory())
+        print("🔴 APP CHECK = ATTEST provider (CollectlyApp.init)")
+        #endif
+
+        // ✅ Firebase le plus tôt possible
+        if FirebaseApp.app() == nil {
+            FirebaseApp.configure()
+            print("✅ Firebase configured (CollectlyApp.init)")
+        }
+
+        // ✅ Ensuite seulement, on instancie tes StateObject
+        _session = StateObject(wrappedValue: SessionStore())
+        _router  = StateObject(wrappedValue: DeepLinkRouter())
+    }
+
     var body: some Scene {
         WindowGroup {
             AppEntryView()
                 .environmentObject(session)
                 .environmentObject(router)
                 .onAppear {
-                    // ✅ Setup push une seule fois
                     guard !didSetupPush else { return }
                     didSetupPush = true
 

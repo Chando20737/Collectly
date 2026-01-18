@@ -22,6 +22,9 @@ final class CardItem {
     // Stocke l’image en Data (simple pour V0.1)
     var frontImageData: Data?
 
+    // ✅ Dos de la carte (pour OCR + historique)
+    var backImageData: Data?
+
     // Prix (on remplira via eBay plus tard)
     var estimatedPriceCAD: Double?
 
@@ -45,6 +48,7 @@ final class CardItem {
         title: String,
         notes: String? = nil,
         frontImageData: Data? = nil,
+        backImageData: Data? = nil,
         estimatedPriceCAD: Double? = nil,
         playerName: String? = nil,
         cardYear: String? = nil,
@@ -62,6 +66,7 @@ final class CardItem {
         self.title = title
         self.notes = notes
         self.frontImageData = frontImageData
+        self.backImageData = backImageData
         self.estimatedPriceCAD = estimatedPriceCAD
         self.playerName = playerName
         self.cardYear = cardYear

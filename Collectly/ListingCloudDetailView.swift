@@ -5,45 +5,34 @@
 //  Created by Eric Chandonnet on 2026-01-10.
 //
 import SwiftUI
-import FirebaseAuth
 import FirebaseFirestore
+import FirebaseAuth
 
 struct ListingCloudDetailView: View {
 
     @EnvironmentObject private var session: SessionStore
 
-    // Input (peut être “stale” / id pas fiable)
     let listing: ListingCloud
 
-    // Live query listener
     @State private var docListener: ListenerRegistration?
     @State private var current: ListingCloud
 
-    // ✅ Service (miser / acheter via rules-friendly writes)
-    private let marketplaceService = MarketplaceService()
-
-    // Micro-UX
     @State private var toast: Toast? = nil
     @State private var isBuying: Bool = false
     @State private var isBidding: Bool = false
 
-    // Bid UI
     @State private var showBidSheet: Bool = false
     @State private var bidAmountText: String = ""
 
-    // MARK: - Init
+    private let service = MarketplaceService()
 
     init(listing: ListingCloud) {
         self.listing = listing
         _current = State(initialValue: listing)
     }
 
-    // MARK: - Constants
-
     private let listingsCollection = "listings"
     private let minBidIncrement: Double = 1
-
-    // MARK: - Computed
 
     private var uid: String? { session.user?.uid }
 
@@ -53,8 +42,6 @@ struct ListingCloudDetailView: View {
     }
 
     private var isAuction: Bool { current.type == "auction" }
-    private var isFixed: Bool { current.type == "fixedPrice" }
-
     private var isActive: Bool { current.status == "active" }
 
     private var endDate: Date? { current.endDate }
@@ -99,8 +86,6 @@ struct ListingCloudDetailView: View {
         }
     }
 
-    // MARK: - Body
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -127,9 +112,7 @@ struct ListingCloudDetailView: View {
         .toast($toast)
         .onAppear { startDocListener() }
         .onDisappear { stopDocListener() }
-        .sheet(isPresented: $showBidSheet) {
-            bidSheet
-        }
+        .sheet(isPresented: $showBidSheet) { bidSheet }
     }
 
     // MARK: - UI blocks
@@ -425,8 +408,7 @@ struct ListingCloudDetailView: View {
             return
         }
 
-        let listingId = resolvedListingId()
-        guard !listingId.isEmpty else {
+        guard !current.id.isEmpty else {
             toast = Toast(style: .error, title: "Annonce introuvable (id manquant).", systemImage: "exclamationmark.triangle.fill")
             Haptic.error()
             return
@@ -437,7 +419,7 @@ struct ListingCloudDetailView: View {
 
         Task {
             do {
-                try await marketplaceService.placeBid(listingId: listingId, bidCAD: amount)
+                try await service.placeBid(listingId: current.id, bidCAD: amount)
                 await MainActor.run {
                     self.isBidding = false
                     self.showBidSheet = false
@@ -461,14 +443,7 @@ struct ListingCloudDetailView: View {
             return
         }
 
-        guard buyNowPriceCAD > 0 else {
-            toast = Toast(style: .error, title: "Prix d’achat non défini.", systemImage: "exclamationmark.triangle.fill")
-            Haptic.error()
-            return
-        }
-
-        let listingId = resolvedListingId()
-        guard !listingId.isEmpty else {
+        guard !current.id.isEmpty else {
             toast = Toast(style: .error, title: "Annonce introuvable (id manquant).", systemImage: "exclamationmark.triangle.fill")
             Haptic.error()
             return
@@ -479,7 +454,7 @@ struct ListingCloudDetailView: View {
 
         Task {
             do {
-                try await marketplaceService.buyNow(listingId: listingId)
+                try await service.buyNow(listingId: current.id)
                 await MainActor.run {
                     self.isBuying = false
                     self.toast = Toast(style: .success, title: "Achat réussi ✅", systemImage: "checkmark.seal.fill")
@@ -495,12 +470,12 @@ struct ListingCloudDetailView: View {
         }
     }
 
-    // MARK: - Firestore listener (document by id, avec gestion permission denied)
+    // MARK: - Firestore listener (doc)
 
     private func startDocListener() {
         stopDocListener()
 
-        let listingId = resolvedListingId()
+        let listingId = !current.id.isEmpty ? current.id : listing.id
         guard !listingId.isEmpty else { return }
 
         let db = Firestore.firestore()
@@ -508,15 +483,9 @@ struct ListingCloudDetailView: View {
 
         docListener = ref.addSnapshotListener { snap, err in
             if let ns = err as NSError? {
-                // Permission denied (FIRFirestoreErrorDomain code 7)
                 if ns.domain == "FIRFirestoreErrorDomain" && ns.code == 7 {
                     DispatchQueue.main.async {
-                        self.toast = Toast(
-                            style: .info,
-                            title: "Annonce non accessible (permissions).",
-                            systemImage: "lock.fill",
-                            duration: 2.6
-                        )
+                        self.toast = Toast(style: .info, title: "Annonce non accessible (permissions).", systemImage: "lock.fill", duration: 2.6)
                     }
                     self.stopDocListener()
                     return
@@ -549,14 +518,7 @@ struct ListingCloudDetailView: View {
         docListener = nil
     }
 
-    private func resolvedListingId() -> String {
-        // priorité à current.id si déjà “live”
-        if !current.id.isEmpty { return current.id }
-        if !listing.id.isEmpty { return listing.id }
-        return ""
-    }
-
-    // MARK: - Helpers
+    // MARK: - Helpers UI
 
     private func money(_ value: Double) -> String {
         return String(format: "%.0f $ CAD", value)
@@ -564,22 +526,16 @@ struct ListingCloudDetailView: View {
 
     private func infoRow(systemImage: String, text: String) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: systemImage)
-                .foregroundStyle(.secondary)
-            Text(text)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            Image(systemName: systemImage).foregroundStyle(.secondary)
+            Text(text).font(.subheadline).foregroundStyle(.secondary)
             Spacer(minLength: 0)
         }
     }
 
     private func infoPill(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.headline.weight(.semibold))
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.headline.weight(.semibold))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -590,11 +546,8 @@ struct ListingCloudDetailView: View {
 
     private func infoPillWide(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.headline.weight(.semibold))
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.headline.weight(.semibold))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -605,11 +558,8 @@ struct ListingCloudDetailView: View {
 
     private func actionHint(_ text: String, icon: String) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: icon)
-                .foregroundStyle(.secondary)
-            Text(text)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            Image(systemName: icon).foregroundStyle(.secondary)
+            Text(text).font(.subheadline).foregroundStyle(.secondary)
             Spacer(minLength: 0)
         }
         .padding(.vertical, 4)

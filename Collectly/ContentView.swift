@@ -9,6 +9,7 @@ import SwiftData
 import UIKit
 import PhotosUI
 import FirebaseAuth
+import FirebaseFirestore
 
 // ✅ ContentView = wrapper (tab "Ma collection")
 //    -> Affiche vide si pas connecté
@@ -74,8 +75,26 @@ private struct CVCollectionHomeView: View {
     @State private var expandedSectionKeys: Set<String> = []
 
     @State private var uiErrorText: String? = nil
-    @State private var showAddSheet = false
 
+    // ✅ Sheets (Add manuel / Quick Edit)
+    private enum SheetRoute: Identifiable, Equatable {
+        case addManual
+        case quickEdit(UUID) // id de la carte
+
+        var id: String {
+            switch self {
+            case .addManual: return "addManual"
+            case .quickEdit(let id): return "quickEdit-\(id.uuidString)"
+            }
+        }
+    }
+
+    @State private var sheet: SheetRoute? = nil
+
+    // ✅ Photo + OCR se présente en fullScreenCover (plus stable que .sheet avec camera)
+    @State private var showPhotoOCRFullScreen: Bool = false
+
+    // ✅ On garde quickEditCard pour ne pas casser ton code existant
     @State private var quickEditCard: CardItem? = nil
 
     // ✅ Confirmation suppression (single + batch)
@@ -95,6 +114,10 @@ private struct CVCollectionHomeView: View {
     @State private var selectedIds: Set<UUID> = []
 
     private let marketplace = MarketplaceService()
+
+    // 👉 NOTE: Tout ce qui suit (enums, body, fonctions, helpers) fait partie
+    //    de CVCollectionHomeView. La struct se ferme plus bas, juste avant
+    //    "// MARK: - Add sheet (LOCAL)".
 
     // MARK: - Enums
 
@@ -190,7 +213,7 @@ private struct CVCollectionHomeView: View {
             case .withoutNotes: return "note.text.badge.plus"
             case .missingPhoto: return "photo.badge.exclamationmark"
             case .missingYear: return "calendar.badge.exclamationmark"
-            case .missingSet: return "square.stack.3d.up.badge.exclamationmark"
+            case .missingSet: return "square.stack.3d.up"
             case .missingPlayer: return "person.badge.minus"
             case .missingGrading: return "checkmark.seal"
             }
@@ -215,43 +238,89 @@ private struct CVCollectionHomeView: View {
         return "\(company) \(grade)"
     }
 
-    // MARK: - Body
+// MARK: - Body
 
-    var body: some View {
-        let _ = favoritesTick
-        let _ = quantityTick
-        return applyBaseModifiers(to: mainView)
-    }
+var body: some View {
+    let _ = favoritesTick
+    let _ = quantityTick
+    return applyBaseModifiers(to: mainView)
+}
 
-    // MARK: - Modifiers split (fix "unable to type-check")
+// MARK: - Modifiers split (fix "unable to type-check")
 
-    @ViewBuilder
-    private func applyBaseModifiers<Content: View>(to content: Content) -> some View {
+@ViewBuilder
+private func applyBaseModifiers<Content: View>(to content: Content) -> some View {
+    // NOTE: ce View est lourd (toolbars + sheets + 3 alerts + onChange). Pour éviter
+    // "The compiler is unable to type-check this expression in reasonable time",
+    // on casse la chaine en 3 blocs via AnyView.
+
+    let v1 = AnyView(
         content
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $searchText, prompt: "Rechercher une carte…")
             .toolbar { toolbarContent }
-            .onAppear(perform: onFirstAppear)
-            .onChange(of: groupBy, perform: { _ in onGroupByChanged() })
-            .onChange(of: sectionSort, perform: { _ in persistUIState() })
-            .onChange(of: viewMode, perform: { _ in persistUIState() })
-            .onChange(of: sort, perform: { _ in onSortChanged() })
-            .onChange(of: filter, perform: { _ in onFilterChanged() })
-            .onChange(of: searchText, perform: { _ in onSearchChanged() })
+    )
 
-            // ✅ IMPORTANT: sheet local qui fournit ownerId
-            .sheet(isPresented: $showAddSheet) {
-                CVAddCardView(ownerId: uid)
+    let v2 = AnyView(
+        v1
+            .onAppear(perform: onFirstAppear)
+            .onChange(of: groupBy) { _ in onGroupByChanged() }
+            .onChange(of: sectionSort) { _ in persistUIState() }
+            .onChange(of: viewMode) { _ in persistUIState() }
+            .onChange(of: sort) { _ in onSortChanged() }
+            .onChange(of: filter) { _ in onFilterChanged() }
+            .onChange(of: searchText) { _ in onSearchChanged() }
+
+            // ✅ IMPORTANT: si ailleurs tu fais quickEditCard = card, on redirige vers sheet unique
+            .onChange(of: quickEditCard) { newValue in
+                guard let card = newValue else { return }
+                // ✅ Ne remplace pas une sheet déjà ouverte (ex: Photo + OCR)
+                guard sheet == nil, showPhotoOCRFullScreen == false else { return }
+                sheet = .quickEdit(card.id)
             }
 
-            // ✅ Quick edit (existe ailleurs dans ton projet)
-            .sheet(item: $quickEditCard) { card in
-                CardQuickEditView(card: card)
-                    .onDisappear {
-                        favoritesTick += 1
-                        quantityTick += 1
+            // 🔎 Debug : si une sheet se ferme toute seule, on veut le voir dans la console
+            .onChange(of: sheet) { newValue in
+                print("🧾 SHEET CHANGED ->", String(describing: newValue))
+            }
+
+            // 🔎 Debug : si le plein écran Photo+OCR se ferme, on veut le voir dans la console
+            .onChange(of: showPhotoOCRFullScreen) { newValue in
+                print("🧾 PHOTO OCR FULLSCREEN ->", newValue ? "presented" : "dismissed")
+            }
+    )
+
+    let v3 = AnyView(
+        v2
+            // ✅ UNE SEULE sheet pour tout (évite conflits / fermeture)
+            .sheet(item: $sheet) { route in
+                switch route {
+                case .addManual:
+                    CVAddCardView(ownerId: uid)
+
+                case .quickEdit:
+                    if let card = quickEditCard {
+                        CardQuickEditView(card: card)
+                            .onDisappear {
+                                favoritesTick += 1
+                                quantityTick += 1
+                                quickEditCard = nil
+                                // ✅ pas besoin de toucher à `sheet` : SwiftUI le remet à nil tout seul
+                            }
+                    } else {
+                        VStack { Text("—") }
+                            .onAppear {
+                                // Ici oui, on ferme si jamais on est dans un état invalide
+                                sheet = nil
+                            }
                     }
+                }
+            }
+
+            // ✅ Photo + OCR en plein écran (évite les dismiss en cascade avec la caméra)
+            .fullScreenCover(isPresented: $showPhotoOCRFullScreen) {
+                CVPhotoOCRAddCardView(ownerId: uid)
             }
 
             .alert("Erreur", isPresented: uiErrorPresented) {
@@ -284,14 +353,18 @@ private struct CVCollectionHomeView: View {
                      ? "Sélectionne au moins 2 cartes à fusionner."
                      : "Fusionner \(count) cartes en une seule? Les autres seront supprimées (quantités additionnées).")
             }
-    }
+    )
 
-    private var uiErrorPresented: Binding<Bool> {
-        Binding(
-            get: { uiErrorText != nil },
-            set: { if !$0 { uiErrorText = nil } }
-        )
-    }
+    return v3
+}
+
+private var uiErrorPresented: Binding<Bool> {
+    Binding(
+        get: { uiErrorText != nil },
+        set: { if !$0 { uiErrorText = nil } }
+    )
+}
+
 
     // MARK: - Event handlers (split)
 
@@ -411,13 +484,20 @@ private struct CVCollectionHomeView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
 
+        // ✅ Gauche : Sélection
         ToolbarItem(placement: .topBarLeading) {
             if isSelectionMode {
                 Menu {
-                    Button { selectAllVisible(filteredCards) } label: { Label("Tout sélectionner", systemImage: "checkmark.circle") }
-                    Button { clearSelection() } label: { Label("Tout désélectionner", systemImage: "circle") }
+                    Button { selectAllVisible(filteredCards) } label: {
+                        Label("Tout sélectionner", systemImage: "checkmark.circle")
+                    }
+                    Button { clearSelection() } label: {
+                        Label("Tout désélectionner", systemImage: "circle")
+                    }
                     Divider()
-                    Button(role: .destructive) { exitSelectionMode() } label: { Label("Terminer la sélection", systemImage: "xmark.circle") }
+                    Button(role: .destructive) { exitSelectionMode() } label: {
+                        Label("Terminer la sélection", systemImage: "xmark.circle")
+                    }
                 } label: {
                     Label("Tout", systemImage: "checkmark.circle")
                 }
@@ -426,87 +506,132 @@ private struct CVCollectionHomeView: View {
             }
         }
 
-        if !isSelectionMode {
+        // ✅ Droite : Options + Ajouter (menu)
+        ToolbarItemGroup(placement: .topBarTrailing) {
 
-            ToolbarItem(placement: .topBarLeading) {
+            // ✅ Un seul bouton pour Filtrer/Trier/Regrouper
+            if !isSelectionMode {
                 Menu {
+                    // --- Filtrer
                     Section("Filtrer") {
-                        Picker("Filtrer", selection: $filter) {
-                            Label(FilterOption.all.rawValue, systemImage: FilterOption.all.systemImage).tag(FilterOption.all)
-                            Label(FilterOption.favorites.rawValue, systemImage: FilterOption.favorites.systemImage).tag(FilterOption.favorites)
-                            Label(FilterOption.withValue.rawValue, systemImage: FilterOption.withValue.systemImage).tag(FilterOption.withValue)
-                            Label(FilterOption.withoutValue.rawValue, systemImage: FilterOption.withoutValue.systemImage).tag(FilterOption.withoutValue)
-                            Label(FilterOption.withNotes.rawValue, systemImage: FilterOption.withNotes.systemImage).tag(FilterOption.withNotes)
-                            Label(FilterOption.withoutNotes.rawValue, systemImage: FilterOption.withoutNotes.systemImage).tag(FilterOption.withoutNotes)
+                        Button { filter = .all } label: {
+                            Label(FilterOption.all.rawValue, systemImage: FilterOption.all.systemImage)
+                        }
+                        Button { filter = .favorites } label: {
+                            Label(FilterOption.favorites.rawValue, systemImage: FilterOption.favorites.systemImage)
+                        }
+                        Button { filter = .withValue } label: {
+                            Label(FilterOption.withValue.rawValue, systemImage: FilterOption.withValue.systemImage)
+                        }
+                        Button { filter = .withoutValue } label: {
+                            Label(FilterOption.withoutValue.rawValue, systemImage: FilterOption.withoutValue.systemImage)
+                        }
+                        Button { filter = .withNotes } label: {
+                            Label(FilterOption.withNotes.rawValue, systemImage: FilterOption.withNotes.systemImage)
+                        }
+                        Button { filter = .withoutNotes } label: {
+                            Label(FilterOption.withoutNotes.rawValue, systemImage: FilterOption.withoutNotes.systemImage)
                         }
                     }
-
-                    Divider()
 
                     Section("Champs manquants") {
-                        Button { filter = .missingPhoto } label: { Label(FilterOption.missingPhoto.rawValue, systemImage: FilterOption.missingPhoto.systemImage) }
-                        Button { filter = .missingYear } label: { Label(FilterOption.missingYear.rawValue, systemImage: FilterOption.missingYear.systemImage) }
-                        Button { filter = .missingSet } label: { Label(FilterOption.missingSet.rawValue, systemImage: FilterOption.missingSet.systemImage) }
-                        Button { filter = .missingPlayer } label: { Label(FilterOption.missingPlayer.rawValue, systemImage: FilterOption.missingPlayer.systemImage) }
-                        Button { filter = .missingGrading } label: { Label(FilterOption.missingGrading.rawValue, systemImage: FilterOption.missingGrading.systemImage) }
-                    }
-
-                    if filter != .all {
-                        Divider()
-                        Button(role: .destructive) { filter = .all } label: {
-                            Label("Réinitialiser les filtres", systemImage: "xmark.circle")
+                        Button { filter = .missingPhoto } label: {
+                            Label(FilterOption.missingPhoto.rawValue, systemImage: FilterOption.missingPhoto.systemImage)
+                        }
+                        Button { filter = .missingYear } label: {
+                            Label(FilterOption.missingYear.rawValue, systemImage: FilterOption.missingYear.systemImage)
+                        }
+                        Button { filter = .missingSet } label: {
+                            Label(FilterOption.missingSet.rawValue, systemImage: FilterOption.missingSet.systemImage)
+                        }
+                        Button { filter = .missingPlayer } label: {
+                            Label(FilterOption.missingPlayer.rawValue, systemImage: FilterOption.missingPlayer.systemImage)
+                        }
+                        Button { filter = .missingGrading } label: {
+                            Label(FilterOption.missingGrading.rawValue, systemImage: FilterOption.missingGrading.systemImage)
                         }
                     }
 
-                } label: {
-                    Image(systemName: filter == .all
-                          ? "line.3.horizontal.decrease.circle"
-                          : "line.3.horizontal.decrease.circle.fill")
-                }
-            }
-
-            ToolbarItem(placement: .topBarLeading) {
-                Menu {
-                    Picker("Trier", selection: $sort) {
+                    // --- Trier
+                    Divider()
+                    Section("Trier") {
                         ForEach(SortOption.allCases) { opt in
-                            Label(opt.rawValue, systemImage: opt.systemImage).tag(opt)
+                            Button {
+                                sort = opt
+                            } label: {
+                                Label(opt.rawValue, systemImage: opt.systemImage)
+                            }
                         }
                     }
-                } label: {
-                    Image(systemName: "arrow.up.arrow.down")
-                }
-            }
 
-            ToolbarItem(placement: .topBarLeading) {
-                Menu {
-                    Picker("Regrouper par", selection: $groupBy) {
+                    // --- Regrouper
+                    Divider()
+                    Section("Regrouper") {
                         ForEach(GroupByOption.allCases) { opt in
-                            Label(opt.rawValue, systemImage: opt.systemImage).tag(opt)
-                        }
-                    }
-
-                    if groupBy != .none {
-                        Divider()
-                        Picker("Trier les sections", selection: $sectionSort) {
-                            ForEach(SectionSortOption.allCases) { opt in
-                                Label(opt.rawValue, systemImage: opt.systemImage).tag(opt)
+                            Button {
+                                groupBy = opt
+                            } label: {
+                                Label(opt.rawValue, systemImage: opt.systemImage)
                             }
                         }
 
-                        Divider()
-                        Button { groupBy = .none } label: {
-                            Label("Désactiver le regroupement", systemImage: "xmark.circle")
+                        if groupBy != .none {
+                            Divider()
+                            Text("Trier les sections")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            ForEach(SectionSortOption.allCases) { opt in
+                                Button {
+                                    sectionSort = opt
+                                } label: {
+                                    Label(opt.rawValue, systemImage: opt.systemImage)
+                                }
+                            }
+
+                            Divider()
+                            Button { groupBy = .none } label: {
+                                Label("Désactiver le regroupement", systemImage: "xmark.circle")
+                            }
                         }
                     }
+
+                    // --- Reset rapide
+                    if filter != .all || sort != .newest || !searchText.trimmedLocal.isEmpty || groupBy != .none {
+                        Divider()
+                        Button(role: .destructive) {
+                            filter = .all
+                            sort = .newest
+                            searchText = ""
+                            groupBy = .none
+                            sectionSort = .valueHigh
+                        } label: {
+                            Label("Réinitialiser", systemImage: "arrow.counterclockwise")
+                        }
+                    }
+
                 } label: {
-                    Image(systemName: groupBy == .none ? "square.grid.2x2" : "square.grid.2x2.fill")
+                    Image(systemName: "slider.horizontal.3")
                 }
             }
-        }
 
-        ToolbarItem(placement: .topBarTrailing) {
-            Button { showAddSheet = true } label: { Image(systemName: "plus") }
-                .disabled(isSelectionMode)
+            // ✅ Menu "Ajouter"
+            Menu {
+                Button {
+                    showPhotoOCRFullScreen = true
+                } label: {
+                    Label("Photo + OCR", systemImage: "camera")
+                }
+
+                Button {
+                    sheet = .addManual
+                } label: {
+                    Label("Ajouter manuellement", systemImage: "plus")
+                }
+            } label: {
+                Label("Ajouter", systemImage: "plus.circle.fill")
+            }
+            .disabled(isSelectionMode)
         }
     }
 
@@ -823,56 +948,62 @@ private struct CVCollectionHomeView: View {
         items.reduce(0) { $0 + QuantityStore.quantity(id: $1.id) }
     }
 
-    // MARK: - Grid / List (normal)
+    // MARK: - Grid / List
 
     @ViewBuilder
     private func collectionGrid(_ items: [CardItem]) -> some View {
         ScrollView {
             LazyVGrid(
-                columns: [
-                    GridItem(.flexible(), spacing: 10, alignment: .top),
-                    GridItem(.flexible(), spacing: 10, alignment: .top)
-                ],
-                spacing: 10
+                columns: [GridItem(.adaptive(minimum: 150), spacing: 12)],
+                spacing: 12
             ) {
                 ForEach(items) { card in
                     if isSelectionMode {
-                        Button { toggleSelected(card) } label: {
-                            CVGridCard(
-                                card: card,
-                                isFavorite: isFavorite(card),
-                                quantity: quantity(card),
-                                gradingLabel: gradingLabel(for: card),
-                                isSelected: isSelected(card),
-                                selectionMode: true,
-                                onToggleFavorite: {},
-                                onToggleSelection: { toggleSelected(card) }
-                            )
+                        Button {
+                            toggleSelected(card)
+                        } label: {
+                            cardGridCell(card)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(isSelected(card) ? Color.accentColor : Color.clear, lineWidth: 3)
+                                )
                         }
                         .buttonStyle(.plain)
                     } else {
-                        NavigationLink { CardDetailView(card: card) } label: {
-                            CVGridCard(
-                                card: card,
-                                isFavorite: isFavorite(card),
-                                quantity: quantity(card),
-                                gradingLabel: gradingLabel(for: card),
-                                isSelected: false,
-                                selectionMode: false,
-                                onToggleFavorite: { toggleFavorite(card) },
-                                onToggleSelection: {}
-                            )
+                        NavigationLink {
+                            CardDetailView(card: card)
+                        } label: {
+                            cardGridCell(card)
                         }
-                        .buttonStyle(CVGridPressableLinkStyle())
-                        .simultaneousGesture(
-                            LongPressGesture(minimumDuration: 0.35)
-                                .onEnded { _ in startSelectionAndSelect(card) }
-                        )
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button {
+                                quickEditCard = card
+                            } label: {
+                                Label("Modifier rapidement", systemImage: "pencil")
+                            }
+
+                            Button {
+                                toggleFavorite(card)
+                            } label: {
+                                Label(
+                                    isFavorite(card) ? "Retirer des favoris" : "Ajouter aux favoris",
+                                    systemImage: isFavorite(card) ? "star.slash" : "star"
+                                )
+                            }
+
+                            Button(role: .destructive) {
+                                pendingDeleteItems = [card]
+                                showDeleteConfirm = true
+                            } label: {
+                                Label("Supprimer", systemImage: "trash")
+                            }
+                        }
                     }
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.bottom, 14)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
         }
     }
 
@@ -881,154 +1012,113 @@ private struct CVCollectionHomeView: View {
         List {
             ForEach(items) { card in
                 if isSelectionMode {
-                    Button { toggleSelected(card) } label: {
-                        CVListRow(
-                            card: card,
-                            isFavorite: isFavorite(card),
-                            quantity: quantity(card),
-                            gradingLabel: gradingLabel(for: card),
-                            isSelected: isSelected(card),
-                            selectionMode: true,
-                            onToggleFavorite: {},
-                            onToggleSelection: { toggleSelected(card) }
-                        )
+                    Button {
+                        toggleSelected(card)
+                    } label: {
+                        cardListRow(card)
                     }
                     .buttonStyle(.plain)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
                 } else {
-                    NavigationLink { CardDetailView(card: card) } label: {
-                        CVListRow(
-                            card: card,
-                            isFavorite: isFavorite(card),
-                            quantity: quantity(card),
-                            gradingLabel: gradingLabel(for: card),
-                            isSelected: false,
-                            selectionMode: false,
-                            onToggleFavorite: { toggleFavorite(card) },
-                            onToggleSelection: {}
-                        )
+                    NavigationLink {
+                        CardDetailView(card: card)
+                    } label: {
+                        cardListRow(card)
                     }
-                    .buttonStyle(CVListPressableLinkStyle())
-                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-                    .simultaneousGesture(
-                        LongPressGesture(minimumDuration: 0.35)
-                            .onEnded { _ in startSelectionAndSelect(card) }
-                    )
+                    .contextMenu {
+                        Button {
+                            quickEditCard = card
+                        } label: {
+                            Label("Modifier rapidement", systemImage: "pencil")
+                        }
+
+                        Button {
+                            toggleFavorite(card)
+                        } label: {
+                            Label(
+                                isFavorite(card) ? "Retirer des favoris" : "Ajouter aux favoris",
+                                systemImage: isFavorite(card) ? "star.slash" : "star"
+                            )
+                        }
+
+                        Button(role: .destructive) {
+                            pendingDeleteItems = [card]
+                            showDeleteConfirm = true
+                        } label: {
+                            Label("Supprimer", systemImage: "trash")
+                        }
+                    }
                 }
             }
         }
         .listStyle(.plain)
     }
 
-    // MARK: - Grouped sections (inchangé)
-
-    private struct CVCollectionSection: Identifiable {
-        let id: String
-        let key: String
-        let items: [CardItem]
-        let totalValueCAD: Double
-    }
-
-    private func buildSections(from items: [CardItem], groupBy: GroupByOption, sectionSort: SectionSortOption) -> [CVCollectionSection] {
-        let dict: [String: [CardItem]] = Dictionary(grouping: items) { card in
-            switch groupBy {
-            case .none: return "Toutes"
-            case .year:
-                let v = (card.cardYear ?? "").trimmedLocal
-                return v.isEmpty ? "Sans année" : v
-            case .set:
-                let v = (card.setName ?? "").trimmedLocal
-                return v.isEmpty ? "Sans set" : v
-            case .player:
-                let v = (card.playerName ?? "").trimmedLocal
-                return v.isEmpty ? "Sans joueur" : v
-            }
-        }
-
-        var sections: [CVCollectionSection] = dict.map { (k, list) in
-            CVCollectionSection(id: k, key: k, items: list, totalValueCAD: totalEstimatedValue(of: list))
-        }
-
-        sections.sort { a, b in
-            let aSans = a.key.lowercased().hasPrefix("sans ")
-            let bSans = b.key.lowercased().hasPrefix("sans ")
-            if aSans != bSans { return bSans }
-
-            switch sectionSort {
-            case .valueHigh:
-                if a.totalValueCAD != b.totalValueCAD { return a.totalValueCAD > b.totalValueCAD }
-                return a.key.localizedCaseInsensitiveCompare(b.key) == .orderedAscending
-            case .alphaAZ:
-                return a.key.localizedCaseInsensitiveCompare(b.key) == .orderedAscending
-            case .alphaZA:
-                return a.key.localizedCaseInsensitiveCompare(b.key) == .orderedDescending
-            }
-        }
-
-        return sections
-    }
+    // MARK: - Grouped grid / list
 
     @ViewBuilder
     private func groupedGrid(_ sections: [CVCollectionSection]) -> some View {
         ScrollView {
-            LazyVStack(spacing: 12) {
+            LazyVStack(spacing: 16) {
                 ForEach(sections) { section in
-                    CVSectionCard(
-                        title: section.key,
-                        count: section.items.count,
-                        valueCAD: section.totalValueCAD,
-                        isExpanded: bindingForSection(section.key)
-                    ) {
-                        LazyVGrid(
-                            columns: [
-                                GridItem(.flexible(), spacing: 10, alignment: .top),
-                                GridItem(.flexible(), spacing: 10, alignment: .top)
-                            ],
-                            spacing: 10
-                        ) {
-                            ForEach(section.items) { card in
-                                if isSelectionMode {
-                                    Button { toggleSelected(card) } label: {
-                                        CVGridCard(
-                                            card: card,
-                                            isFavorite: isFavorite(card),
-                                            quantity: quantity(card),
-                                            gradingLabel: gradingLabel(for: card),
-                                            isSelected: isSelected(card),
-                                            selectionMode: true,
-                                            onToggleFavorite: {},
-                                            onToggleSelection: { toggleSelected(card) }
-                                        )
+                    VStack(alignment: .leading, spacing: 8) {
+                        sectionHeader(section)
+
+                        if expandedSectionKeys.contains(section.key) {
+                            LazyVGrid(
+                                columns: [GridItem(.adaptive(minimum: 150), spacing: 12)],
+                                spacing: 12
+                            ) {
+                                ForEach(section.items) { card in
+                                    if isSelectionMode {
+                                        Button {
+                                            toggleSelected(card)
+                                        } label: {
+                                            cardGridCell(card)
+                                                .overlay(
+                                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                        .stroke(isSelected(card) ? Color.accentColor : Color.clear, lineWidth: 3)
+                                                )
+                                        }
+                                        .buttonStyle(.plain)
+                                    } else {
+                                        NavigationLink {
+                                            CardDetailView(card: card)
+                                        } label: {
+                                            cardGridCell(card)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .contextMenu {
+                                            Button {
+                                                quickEditCard = card
+                                            } label: {
+                                                Label("Modifier rapidement", systemImage: "pencil")
+                                            }
+
+                                            Button {
+                                                toggleFavorite(card)
+                                            } label: {
+                                                Label(
+                                                    isFavorite(card) ? "Retirer des favoris" : "Ajouter aux favoris",
+                                                    systemImage: isFavorite(card) ? "star.slash" : "star"
+                                                )
+                                            }
+
+                                            Button(role: .destructive) {
+                                                pendingDeleteItems = [card]
+                                                showDeleteConfirm = true
+                                            } label: {
+                                                Label("Supprimer", systemImage: "trash")
+                                            }
+                                        }
                                     }
-                                    .buttonStyle(.plain)
-                                } else {
-                                    NavigationLink { CardDetailView(card: card) } label: {
-                                        CVGridCard(
-                                            card: card,
-                                            isFavorite: isFavorite(card),
-                                            quantity: quantity(card),
-                                            gradingLabel: gradingLabel(for: card),
-                                            isSelected: false,
-                                            selectionMode: false,
-                                            onToggleFavorite: { toggleFavorite(card) },
-                                            onToggleSelection: {}
-                                        )
-                                    }
-                                    .buttonStyle(CVGridPressableLinkStyle())
-                                    .simultaneousGesture(
-                                        LongPressGesture(minimumDuration: 0.35)
-                                            .onEnded { _ in startSelectionAndSelect(card) }
-                                    )
                                 }
                             }
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.bottom, 8)
                     }
-                    .padding(.horizontal, 10)
+                    .padding(.horizontal, 12)
                 }
             }
-            .padding(.bottom, 14)
+            .padding(.vertical, 8)
         }
     }
 
@@ -1040,113 +1130,365 @@ private struct CVCollectionHomeView: View {
                     if expandedSectionKeys.contains(section.key) {
                         ForEach(section.items) { card in
                             if isSelectionMode {
-                                Button { toggleSelected(card) } label: {
-                                    CVListRow(
-                                        card: card,
-                                        isFavorite: isFavorite(card),
-                                        quantity: quantity(card),
-                                        gradingLabel: gradingLabel(for: card),
-                                        isSelected: isSelected(card),
-                                        selectionMode: true,
-                                        onToggleFavorite: {},
-                                        onToggleSelection: { toggleSelected(card) }
-                                    )
+                                Button {
+                                    toggleSelected(card)
+                                } label: {
+                                    cardListRow(card)
                                 }
                                 .buttonStyle(.plain)
                             } else {
-                                NavigationLink { CardDetailView(card: card) } label: {
-                                    CVListRow(
-                                        card: card,
-                                        isFavorite: isFavorite(card),
-                                        quantity: quantity(card),
-                                        gradingLabel: gradingLabel(for: card),
-                                        isSelected: false,
-                                        selectionMode: false,
-                                        onToggleFavorite: { toggleFavorite(card) },
-                                        onToggleSelection: {}
-                                    )
+                                NavigationLink {
+                                    CardDetailView(card: card)
+                                } label: {
+                                    cardListRow(card)
                                 }
-                                .buttonStyle(CVListPressableLinkStyle())
+                                .contextMenu {
+                                    Button {
+                                        quickEditCard = card
+                                    } label: {
+                                        Label("Modifier rapidement", systemImage: "pencil")
+                                    }
+
+                                    Button {
+                                        toggleFavorite(card)
+                                    } label: {
+                                        Label(
+                                            isFavorite(card) ? "Retirer des favoris" : "Ajouter aux favoris",
+                                            systemImage: isFavorite(card) ? "star.slash" : "star"
+                                        )
+                                    }
+
+                                    Button(role: .destructive) {
+                                        pendingDeleteItems = [card]
+                                        showDeleteConfirm = true
+                                    } label: {
+                                        Label("Supprimer", systemImage: "trash")
+                                    }
+                                }
                             }
                         }
                     }
                 } header: {
-                    Button { toggleSection(section.key) } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: expandedSectionKeys.contains(section.key) ? "chevron.down" : "chevron.right")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .frame(width: 16)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(section.key)
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
-
-                                if section.totalValueCAD > 0 {
-                                    Text("≈ \(CVMoney.moneyCAD(section.totalValueCAD))")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                            }
-
-                            Spacer()
-
-                            Text("\(section.items.count)")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Capsule(style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
-                        }
-                        .padding(.vertical, 6)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
+                    sectionHeader(section)
+                        .padding(.vertical, 4)
                 }
             }
         }
-        .listStyle(.plain)
+        .listStyle(.insetGrouped)
     }
 
-    // MARK: - Expand / collapse
+    // MARK: - Section header
 
-    private func rebuildExpandedKeys() {
-        guard groupBy != .none else { expandedSectionKeys = []; return }
-        let sections = buildSections(from: filteredCards, groupBy: groupBy, sectionSort: sectionSort)
-        expandedSectionKeys = Set(sections.map { $0.key })
+    @ViewBuilder
+    private func sectionHeader(_ section: CVCollectionSection) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                toggleSection(section.key)
+            } label: {
+                Image(systemName: expandedSectionKeys.contains(section.key) ? "chevron.down" : "chevron.right")
+                    .font(.caption)
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(section.title)
+                    .font(.headline)
+                HStack(spacing: 8) {
+                    if let subtitle = section.subtitle, !subtitle.isEmpty {
+                        Text(subtitle)
+                    }
+                    Text("\(section.items.count) cartes")
+                    Text("x\(section.totalQuantity)")
+                    if section.totalValueCAD > 0 {
+                        Text(String(format: "~%.0f $", section.totalValueCAD))
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
     }
 
     private func toggleSection(_ key: String) {
-        if expandedSectionKeys.contains(key) { expandedSectionKeys.remove(key) }
-        else { expandedSectionKeys.insert(key) }
+        if expandedSectionKeys.contains(key) {
+            expandedSectionKeys.remove(key)
+        } else {
+            expandedSectionKeys.insert(key)
+        }
     }
 
-    private func bindingForSection(_ key: String) -> Binding<Bool> {
-        Binding(
-            get: { expandedSectionKeys.contains(key) },
-            set: { newValue in
-                if newValue { expandedSectionKeys.insert(key) }
-                else { expandedSectionKeys.remove(key) }
+    // MARK: - Cells
+
+        @ViewBuilder
+        private func cardGridCell(_ card: CardItem) -> some View {
+            // Espace volontaire entre la photo et le texte (évite l'effet « collé »)
+            VStack(alignment: .leading, spacing: 10) {
+                ZStack(alignment: .topTrailing) {
+                    if let data = card.frontImageData,
+                       let uiImage = UIImage(data: data) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFill()
+                            // 📐 Carte verticale (ratio ~ 2.5 x 3.5)
+                            .aspectRatio(2.5/3.5, contentMode: .fill)
+                            .frame(maxWidth: .infinity)
+                            .clipped()
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    } else {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color(.secondarySystemBackground))
+                                .aspectRatio(2.5/3.5, contentMode: .fill)
+                                .frame(maxWidth: .infinity)
+                            Image(systemName: "photo")
+                                .font(.largeTitle)
+                                .foregroundStyle(.secondary)
+                        }
+                        .clipped()
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+
+                    if isFavorite(card) {
+                        Image(systemName: "star.fill")
+                            .imageScale(.small)
+                            .padding(6)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Capsule())
+                            .padding(6)
+                    }
+                }
+                .padding(.bottom, 2)
+
+                Text(card.title)
+                    .font(.headline)
+                    .lineLimit(2)
+
+                if let player = card.playerName?.trimmedLocal, !player.isEmpty {
+                    Text(player)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else if let label = gradingLabel(for: card) {
+                    Text(label)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                HStack {
+                    if quantity(card) > 1 {
+                        Text("x\(quantity(card))")
+                            .font(.caption2)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(.thinMaterial)
+                            .clipShape(Capsule())
+                    }
+                    Spacer()
+                    if let v = card.estimatedPriceCAD, v > 0 {
+                        Text("~\(Int(v)) $")
+                            .font(.caption2)
+                            .fontWeight(.semibold)
+                    }
+                }
             }
-        )
+            .padding(8)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color(.systemBackground))
+                    .shadow(radius: 1, x: 0, y: 1)
+            )
+        }
+
+        @ViewBuilder
+        private func cardListRow(_ card: CardItem) -> some View {
+            HStack(spacing: 10) {
+                ZStack {
+                    if let data = card.frontImageData,
+                       let uiImage = UIImage(data: data) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 60, height: 80)
+                            .clipped()
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    } else {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color(.secondarySystemBackground))
+                            .frame(width: 60, height: 80)
+                            .overlay {
+                                Image(systemName: "photo")
+                                    .foregroundStyle(.secondary)
+                            }
+                    }
+
+                    if isFavorite(card) {
+                        Image(systemName: "star.fill")
+                            .imageScale(.small)
+                            .padding(4)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Capsule())
+                            .offset(x: 20, y: -32)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(card.title)
+                        .font(.headline)
+                        .lineLimit(2)
+
+                    if let player = card.playerName?.trimmedLocal, !player.isEmpty {
+                        Text(player)
+                    } else if let label = gradingLabel(for: card) {
+                        Text(label)
+                    }
+
+                    HStack(spacing: 8) {
+                        if let year = card.cardYear?.trimmedLocal, !year.isEmpty {
+                            Text(year)
+                        }
+                        if let setName = card.setName?.trimmedLocal, !setName.isEmpty {
+                            Text(setName)
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 4) {
+                    if let v = card.estimatedPriceCAD, v > 0 {
+                        Text(String(format: "~%.0f $", v))
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                    }
+
+                    if quantity(card) > 1 {
+                        Text("x\(quantity(card))")
+                            .font(.caption2)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(.thinMaterial)
+                            .clipShape(Capsule())
+                    }
+
+                    if isSelectionMode && isSelected(card) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(Color.accentColor)
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+        }
+
+    // MARK: - Grouped sections helpers
+
+    private func buildSections(
+        from items: [CardItem],
+        groupBy: GroupByOption,
+        sectionSort: SectionSortOption
+    ) -> [CVCollectionSection] {
+        guard groupBy != .none else { return [] }
+
+        var dict: [String: [CardItem]] = [:]
+
+        for card in items {
+            let key = sectionKey(for: card, groupBy: groupBy)
+            dict[key, default: []].append(card)
+        }
+
+        var sections: [CVCollectionSection] = dict.map { key, cards in
+            let title = key
+            let count = cards.count
+            let totalValue = totalEstimatedValue(of: cards)
+            let totalQty = totalQuantity(of: cards)
+
+            let subtitle: String
+            switch groupBy {
+            case .year:
+                subtitle = count == 1 ? "1 carte" : "\(count) cartes"
+            case .set:
+                subtitle = count == 1 ? "1 carte" : "\(count) cartes"
+            case .player:
+                subtitle = count == 1 ? "1 carte" : "\(count) cartes"
+            case .none:
+                subtitle = ""
+            }
+
+            return CVCollectionSection(
+                key: key,
+                title: title,
+                subtitle: subtitle,
+                totalValueCAD: totalValue,
+                totalQuantity: totalQty,
+                items: cards
+            )
+        }
+
+        switch sectionSort {
+        case .valueHigh:
+            sections.sort { $0.totalValueCAD > $1.totalValueCAD }
+        case .alphaAZ:
+            sections.sort {
+                $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+            }
+        case .alphaZA:
+            sections.sort {
+                $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedDescending
+            }
+        }
+
+        return sections
+    }
+
+    private func sectionKey(for card: CardItem, groupBy: GroupByOption) -> String {
+        switch groupBy {
+        case .none:
+            return "Toutes"
+        case .year:
+            let year = (card.cardYear ?? "").trimmedLocal
+            return year.isEmpty ? "Année inconnue" : year
+        case .set:
+            let setName = (card.setName ?? "").trimmedLocal
+            return setName.isEmpty ? "Set inconnu" : setName
+        case .player:
+            let player = (card.playerName ?? "").trimmedLocal
+            return player.isEmpty ? "Joueur inconnu" : player
+        }
+    }
+
+    // MARK: - Expand / collapse helpers
+
+    private func rebuildExpandedKeys() {
+        guard groupBy != .none else {
+            expandedSectionKeys = []
+            return
+        }
+
+        let items = filteredCards
+        let sections = buildSections(from: items, groupBy: groupBy, sectionSort: sectionSort)
+        expandedSectionKeys = Set(sections.map { $0.key })
     }
 
     private func groupedAllExpanded(keys: Set<String>) -> Bool {
         guard !keys.isEmpty else { return false }
-        return keys.isSubset(of: expandedSectionKeys)
+        return keys.allSatisfy { expandedSectionKeys.contains($0) }
     }
 
     private func toggleAllSections(keys: Set<String>) {
-        guard !keys.isEmpty else { return }
-        if keys.isSubset(of: expandedSectionKeys) { expandedSectionKeys.subtract(keys) }
-        else { expandedSectionKeys.formUnion(keys) }
+        if groupedAllExpanded(keys: keys) {
+            expandedSectionKeys.subtract(keys)
+        } else {
+            expandedSectionKeys.formUnion(keys)
+        }
     }
-}
 
-// MARK: - ✅ Add sheet (LOCAL) — fixe l’erreur ownerId
+} // ✅ end of CVCollectionHomeView
+
+// MARK: - Add sheet (LOCAL)
 
 private struct CVAddCardView: View {
 
@@ -1258,7 +1600,6 @@ private struct CVAddCardView: View {
         let n = notes.trimmedLocal
         let finalNotes: String? = n.isEmpty ? nil : n
 
-        // ✅ IMPORTANT: ownerId obligatoire
         let card = CardItem(
             ownerId: ownerId,
             title: t,
@@ -1277,437 +1618,192 @@ private struct CVAddCardView: View {
     }
 }
 
-// MARK: - Mini header (unique)
+// MARK: - Mini header (stats + filtres)
 
 private struct CVCollectionMiniHeader: View {
     let count: Int
     let totalCopies: Int
     let totalValueCAD: Double
+
     let hasActiveFilter: Bool
     let hasActiveSearch: Bool
+
     let sortLabel: String
     let groupLabel: String
     let isGrouped: Bool
     let sectionSortLabel: String
-
     let sectionCount: Int
     let groupAllExpanded: Bool
     let isFavoritesFilterOn: Bool
     let missingFilterLabel: String?
+
     let onToggleAll: () -> Void
     let onReset: () -> Void
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Ma collection")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                HStack(spacing: 10) {
-                    Text("\(count) carte\(count > 1 ? "s" : "")")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    if totalCopies != count {
-                        Text("\(totalCopies) exemplaire\(totalCopies > 1 ? "s" : "")")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if totalValueCAD > 0 {
-                        Text("≈ \(CVMoney.moneyCAD(totalValueCAD))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-
-            Spacer()
-
-            HStack(spacing: 8) {
-                Chip(text: sortLabel, systemImage: "arrow.up.arrow.down")
-
-                if isGrouped {
-                    Chip(text: "Par \(groupLabel.lowercased())", systemImage: "square.grid.2x2.fill")
-                    Chip(text: sectionSortLabel, systemImage: "list.bullet")
-                    if sectionCount > 0 {
-                        ToggleAllChip(isExpanded: groupAllExpanded, sectionCount: sectionCount, onTap: onToggleAll)
-                    }
-                }
-
-                if let missingFilterLabel {
-                    Chip(text: missingFilterLabel, systemImage: "exclamationmark.circle")
-                }
-
-                if isFavoritesFilterOn { Chip(text: "Favoris", systemImage: "star.fill") }
-                if hasActiveFilter { Chip(text: "Filtré", systemImage: "line.3.horizontal.decrease.circle.fill") }
-                if hasActiveSearch { Chip(text: "Recherche", systemImage: "magnifyingglass") }
-
-                if hasActiveFilter || hasActiveSearch || isGrouped || isFavoritesFilterOn || sortLabel != CVCollectionHomeView.SortOption.newest.rawValue {
-                    Button { onReset() } label: { Image(systemName: "arrow.counterclockwise") }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-
-    private struct Chip: View {
-        let text: String
-        let systemImage: String
-
-        var body: some View {
-            HStack(spacing: 6) {
-                Image(systemName: systemImage)
-                Text(text).lineLimit(1)
-            }
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(Capsule(style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
-        }
-    }
-
-    private struct ToggleAllChip: View {
-        let isExpanded: Bool
-        let sectionCount: Int
-        let onTap: () -> Void
-
-        var body: some View {
-            Button { onTap() } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: isExpanded ? "rectangle.compress.vertical" : "rectangle.expand.vertical")
-                    Text(isExpanded ? "Tout fermer (\(sectionCount))" : "Tout ouvrir (\(sectionCount))").lineLimit(1)
-                }
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(Capsule(style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
-            }
-            .buttonStyle(.plain)
-        }
-    }
-}
-
-// MARK: - Section card (Grid grouped)
-
-private struct CVSectionCard<Content: View>: View {
-    let title: String
-    let count: Int
-    let valueCAD: Double
-    @Binding var isExpanded: Bool
-    @ViewBuilder let content: Content
-
-    init(
-        title: String,
-        count: Int,
-        valueCAD: Double,
-        isExpanded: Binding<Bool>,
-        @ViewBuilder content: () -> Content
-    ) {
-        self.title = title
-        self.count = count
-        self.valueCAD = valueCAD
-        self._isExpanded = isExpanded
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Button { isExpanded.toggle() } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 16)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(title)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-
-                        if valueCAD > 0 {
-                            Text("≈ \(CVMoney.moneyCAD(valueCAD))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-
-                    Spacer()
-
-                    Text("\(count)")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Capsule(style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-            }
-            .buttonStyle(.plain)
-
-            if isExpanded {
-                Divider().padding(.horizontal, 10).padding(.bottom, 8)
-                content
-            }
-        }
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color(.systemGroupedBackground)))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.black.opacity(0.06), lineWidth: 1))
-    }
-}
-
-// MARK: - Grid Card
-
-private struct CVGridCard: View {
-    let card: CardItem
-    let isFavorite: Bool
-    let quantity: Int
-    let gradingLabel: String?
-
-    let isSelected: Bool
-    let selectionMode: Bool
-    let onToggleFavorite: () -> Void
-    let onToggleSelection: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-
-            CVLocalThumb(data: card.frontImageData, height: 200)
-                .overlay(alignment: .topLeading) {
-                    if selectionMode {
-                        Button { onToggleSelection() } label: {
-                            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                                .font(.subheadline.weight(.semibold))
-                                .padding(8)
-                                .background(Circle().fill(Color(.systemBackground).opacity(0.9)))
-                                .overlay(Circle().stroke(Color.black.opacity(0.10), lineWidth: 1))
-                        }
-                        .buttonStyle(.plain)
-                    } else {
-                        Button { onToggleFavorite() } label: {
-                            Image(systemName: isFavorite ? "star.fill" : "star")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(isFavorite ? Color.yellow : Color.secondary)
-                                .padding(8)
-                                .background(Circle().fill(Color(.systemBackground).opacity(0.9)))
-                                .overlay(Circle().stroke(Color.black.opacity(0.10), lineWidth: 1))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .overlay(alignment: .topTrailing) {
-                    HStack(spacing: 6) {
-                        if quantity > 1 {
-                            Text("x\(quantity)")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
-                                .background(Capsule(style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
-                                .overlay(Capsule(style: .continuous).stroke(Color.black.opacity(0.06), lineWidth: 1))
-                        }
-
-                        if let gradingLabel {
-                            GradingOverlayBadge(label: gradingLabel, compact: false)
-                        }
-                    }
-                    .padding(.trailing, 6)
-                    .padding(.top, 6)
-                }
-
-            Text(card.title)
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if let notes = card.notes?.trimmedLocal, !notes.isEmpty {
-                Text(notes)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-
-            if let price = card.estimatedPriceCAD, price > 0 {
-                Text("≈ \(CVMoney.moneyCAD(price))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-        }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
-        .contentShape(Rectangle())
-    }
-}
-
-// MARK: - List Row
-
-private struct CVListRow: View {
-    let card: CardItem
-    let isFavorite: Bool
-    let quantity: Int
-    let gradingLabel: String?
-
-    let isSelected: Bool
-    let selectionMode: Bool
-    let onToggleFavorite: () -> Void
-    let onToggleSelection: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-
-            CVLocalThumb(data: card.frontImageData, height: 72)
-                .frame(width: 52)
-                .overlay(alignment: .topTrailing) {
-                    if let gradingLabel {
-                        GradingOverlayBadge(label: gradingLabel, compact: true)
-                            .offset(x: 8, y: -8)
-                    }
-                }
-
-            VStack(alignment: .leading, spacing: 2) {
-
-                HStack(spacing: 6) {
-                    Text(card.title)
-                        .font(.headline)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    if quantity > 1 {
-                        Text("x\(quantity)")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Capsule(style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
-                    }
-
-                    if isFavorite && !selectionMode {
-                        Image(systemName: "star.fill")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.yellow)
-                    }
-                }
-
-                if let notes = card.notes?.trimmedLocal, !notes.isEmpty {
-                    Text(notes)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("\(count) carte\(count > 1 ? "s" : "")")
+                    .font(.headline)
+                if totalCopies > count {
+                    Text("x\(totalCopies)")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
                 }
+                Spacer()
+                if totalValueCAD > 0 {
+                    Text(String(format: "~%.0f $", totalValueCAD))
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                }
+            }
 
-                if let price = card.estimatedPriceCAD, price > 0 {
-                    Text("≈ \(CVMoney.moneyCAD(price))")
-                        .font(.footnote)
+            HStack(spacing: 6) {
+                if hasActiveFilter || hasActiveSearch || isGrouped {
+                    if hasActiveFilter {
+                        if isFavoritesFilterOn {
+                            pill("Favoris", systemImage: "star.fill")
+                        } else if let missing = missingFilterLabel {
+                            pill(missing, systemImage: "exclamationmark.circle")
+                        } else {
+                            pill("Filtre: \(sortLabel)", systemImage: "line.3.horizontal.decrease.circle")
+                        }
+                    }
+
+                    if hasActiveSearch {
+                        pill("Recherche", systemImage: "magnifyingglass")
+                    }
+
+                    if isGrouped {
+                        pill("Groupé: \(groupLabel)", systemImage: "square.stack.3d.up")
+                        if sectionCount > 0 {
+                            Button {
+                                onToggleAll()
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: groupAllExpanded ? "chevron.down" : "chevron.right")
+                                    Text("\(sectionCount) section\(sectionCount > 1 ? "s" : "")")
+                                }
+                                .font(.caption2)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(.thinMaterial)
+                                .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    Button(role: .destructive) {
+                        onReset()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.counterclockwise")
+                            Text("Réinit.")
+                        }
+                        .font(.caption2)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.thinMaterial)
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Text("Aucun filtre actif")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
-
-            Spacer()
-
-            if selectionMode {
-                Button { onToggleSelection() } label: {
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.title3)
-                        .foregroundStyle(isSelected ? .blue : .secondary)
-                }
-                .buttonStyle(.plain)
-            } else {
-                Button { onToggleFavorite() } label: {
-                    Image(systemName: isFavorite ? "star.fill" : "star")
-                        .font(.title3)
-                        .foregroundStyle(isFavorite ? .yellow : .secondary)
-                }
-                .buttonStyle(.plain)
-            }
         }
-        .padding(.vertical, 2)
-        .contentShape(Rectangle())
     }
-}
 
-// MARK: - Local thumb
-
-private struct CVLocalThumb: View {
-    let data: Data?
-    let height: CGFloat
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(.systemBackground))
-
-            if let data, let uiImage = UIImage(data: data) {
-                Image(uiImage: uiImage)
-                    .resizable()
-                    .scaledToFit()
-                    .padding(6)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(.secondary.opacity(0.10))
-                    Image(systemName: "photo")
-                        .foregroundStyle(.secondary)
-                }
-                .padding(6)
-            }
-
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.black.opacity(0.10), lineWidth: 1)
+    private func pill(_ text: String, systemImage: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: systemImage)
+            Text(text)
         }
-        .frame(height: height)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .font(.caption2)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(.thinMaterial)
+        .clipShape(Capsule())
     }
 }
 
-// MARK: - Button styles
+// MARK: - Section model
 
-private struct CVGridPressableLinkStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.985 : 1.0)
-            .opacity(configuration.isPressed ? 0.96 : 1.0)
-            .animation(.spring(response: 0.22, dampingFraction: 0.85), value: configuration.isPressed)
-    }
-}
+private struct CVCollectionSection: Identifiable {
+    let key: String
+    let title: String
+    let subtitle: String?
+    let totalValueCAD: Double
+    let totalQuantity: Int
+    let items: [CardItem]
 
-private struct CVListPressableLinkStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(configuration.isPressed ? Color.blue.opacity(0.06) : Color.clear)
-            )
-            .scaleEffect(configuration.isPressed ? 0.995 : 1.0)
-            .animation(.spring(response: 0.22, dampingFraction: 0.90), value: configuration.isPressed)
-    }
-}
-
-// MARK: - Money formatter
-
-private enum CVMoney {
-    static func moneyCAD(_ value: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = "CAD"
-        formatter.maximumFractionDigits = 2
-        formatter.minimumFractionDigits = 2
-        return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.2f $ CAD", value)
-    }
+    var id: String { key }
 }
 
 // MARK: - Helpers
 
 private extension String {
     var trimmedLocal: String { trimmingCharacters(in: .whitespacesAndNewlines) }
+}
+
+// MARK: - MarketplaceService helper
+
+private extension MarketplaceService {
+
+    /// Termine (ended) les annonces liées à une CardItem supprimée.
+    /// - Respecte le comportement déjà prévu: fixedPrice active/paused -> ended, auction active avec 0 bid -> ended.
+    func endListingIfExistsForDeletedCard(cardItemId: String) async {
+        guard let user = Auth.auth().currentUser else { return }
+
+        do {
+            let db = Firestore.firestore()
+            let snap = try await db.collection("listings")
+                .whereField("sellerId", isEqualTo: user.uid)
+                .whereField("cardItemId", isEqualTo: cardItemId)
+                .getDocuments()
+
+            guard !snap.documents.isEmpty else { return }
+
+            let batch = db.batch()
+            let ts = Timestamp(date: Date())
+
+            for doc in snap.documents {
+                let data = doc.data()
+                let status = (data["status"] as? String) ?? ""
+                if status == "sold" || status == "ended" { continue }
+
+                let type = (data["type"] as? String) ?? ""
+
+                if type == "fixedPrice" {
+                    if status == "active" || status == "paused" {
+                        batch.updateData([
+                            "status": "ended",
+                            "endedAt": ts,
+                            "updatedAt": ts
+                        ], forDocument: doc.reference)
+                    }
+                }
+
+                if type == "auction" {
+                    if status == "active" {
+                        let bidCount = (data["bidCount"] as? Int) ?? 0
+                        if bidCount == 0 {
+                            batch.updateData([
+                                "status": "ended",
+                                "endedAt": ts,
+                                "updatedAt": ts
+                            ], forDocument: doc.reference)
+                        }
+                    }
+                }
+            }
+
+            try await batch.commit()
+        } catch {
+            print("⚠️ endListingIfExistsForDeletedCard error:", error.localizedDescription)
+        }
+    }
 }

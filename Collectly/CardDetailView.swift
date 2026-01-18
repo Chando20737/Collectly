@@ -544,7 +544,8 @@ struct CardDetailView: View {
         isWorking = true
         defer { isWorking = false }
 
-        await marketplace.endListingIfExistsForDeletedCard(cardItemId: card.id.uuidString)
+        // ✅ FIX: ne dépend plus d’une méthode fileprivate dans MarketplaceService
+        await endListingIfExistsForDeletedCard(cardItemId: card.id.uuidString)
 
         await MainActor.run {
             modelContext.delete(card)
@@ -554,6 +555,62 @@ struct CardDetailView: View {
             } catch {
                 uiErrorText = error.localizedDescription
             }
+        }
+    }
+
+    // MARK: - ✅ Local Firestore helper (évite l’erreur "fileprivate")
+
+    /// Termine (ended) les annonces liées à une CardItem supprimée.
+    /// - fixedPrice active/paused -> ended
+    /// - auction active avec 0 bid -> ended
+    private func endListingIfExistsForDeletedCard(cardItemId: String) async {
+        guard let user = Auth.auth().currentUser else { return }
+
+        do {
+            let snap = try await db.collection("listings")
+                .whereField("sellerId", isEqualTo: user.uid)
+                .whereField("cardItemId", isEqualTo: cardItemId)
+                .getDocuments()
+
+            guard !snap.documents.isEmpty else { return }
+
+            let batch = db.batch()
+            let ts = Timestamp(date: Date())
+
+            for doc in snap.documents {
+                let data = doc.data()
+                let status = (data["status"] as? String) ?? ""
+                if status == "sold" || status == "ended" { continue }
+
+                let type = (data["type"] as? String) ?? ""
+
+                if type == "fixedPrice" {
+                    if status == "active" || status == "paused" {
+                        batch.updateData([
+                            "status": "ended",
+                            "endedAt": ts,
+                            "updatedAt": ts
+                        ], forDocument: doc.reference)
+                    }
+                }
+
+                if type == "auction" {
+                    if status == "active" {
+                        let bidCount = (data["bidCount"] as? Int) ?? 0
+                        if bidCount == 0 {
+                            batch.updateData([
+                                "status": "ended",
+                                "endedAt": ts,
+                                "updatedAt": ts
+                            ], forDocument: doc.reference)
+                        }
+                    }
+                }
+            }
+
+            try await batch.commit()
+        } catch {
+            print("⚠️ endListingIfExistsForDeletedCard error:", error.localizedDescription)
         }
     }
 }

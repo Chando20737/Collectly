@@ -11,6 +11,7 @@
 		573600EB2F12D9690015A656 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 573600EA2F12D9690015A656 /* FirebaseCore */; };
 		573600ED2F12D9690015A656 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 573600EC2F12D9690015A656 /* FirebaseFirestore */; };
 		573600EF2F12D9690015A656 /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 573600EE2F12D9690015A656 /* FirebaseStorage */; };
+		57AA6BCE2F1C6B8F0041F690 /* FirebaseAppCheck in Frameworks */ = {isa = PBXBuildFile; productRef = 57AA6BCD2F1C6B8F0041F690 /* FirebaseAppCheck */; };
 		57C83EC52F160C28005F75D3 /* .gitignore in Resources */ = {isa = PBXBuildFile; fileRef = 57C83EC42F160C28005F75D3 /* .gitignore */; };
 		57C83ED02F16FD65005F75D3 /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = 57C83ECF2F16FD65005F75D3 /* FirebaseMessaging */; };
 /* End PBXBuildFile section */
@@ -79,6 +80,7 @@
 				573600EF2F12D9690015A656 /* FirebaseStorage in Frameworks */,
 				57C83ED02F16FD65005F75D3 /* FirebaseMessaging in Frameworks */,
 				573600E92F12D9690015A656 /* FirebaseAuth in Frameworks */,
+				57AA6BCE2F1C6B8F0041F690 /* FirebaseAppCheck in Frameworks */,
 				573600ED2F12D9690015A656 /* FirebaseFirestore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -154,6 +156,7 @@
 				573600EC2F12D9690015A656 /* FirebaseFirestore */,
 				573600EE2F12D9690015A656 /* FirebaseStorage */,
 				57C83ECF2F16FD65005F75D3 /* FirebaseMessaging */,
+				57AA6BCD2F1C6B8F0041F690 /* FirebaseAppCheck */,
 			);
 			productName = Collectly;
 			productReference = 57219D5C2F12A22E00808E5C /* Collectly.app */;
@@ -329,7 +332,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Collectly/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Scanner vos cartes de hockey pour les ajouter à votre inventaire.\nScanner vos cartes de hockey pour les ajouter à votre inventaire.\n";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Collectly a besoin de la caméra pour scanner tes cartes et les ajouter à ta collection.\nCollectly a besoin de la caméra pour scanner tes cartes et les ajouter à ta collection.\nPour scanner les cartes";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Collectly a besoin d’accéder à vos photos pour importer une image de carte à scanner.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -368,7 +372,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Collectly/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Scanner vos cartes de hockey pour les ajouter à votre inventaire.\nScanner vos cartes de hockey pour les ajouter à votre inventaire.\n";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Collectly a besoin de la caméra pour scanner tes cartes et les ajouter à ta collection.\nCollectly a besoin de la caméra pour scanner tes cartes et les ajouter à ta collection.\nPour scanner les cartes";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Collectly a besoin d’accéder à vos photos pour importer une image de carte à scanner.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -664,6 +669,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 573600E72F12D9690015A656 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseStorage;
+		};
+		57AA6BCD2F1C6B8F0041F690 /* FirebaseAppCheck */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 573600E72F12D9690015A656 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAppCheck;
 		};
 		57C83ECF2F16FD65005F75D3 /* FirebaseMessaging */ = {
 			isa = XCSwiftPackageProductDependency;

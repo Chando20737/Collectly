@@ -1,6 +1,6 @@
-# Collectly
+# Cardia
 
-Collectly est une application iOS de gestion et de mise en marché de cartes à collectionner (hockey, sports, collectibles), avec support des ventes à prix fixe, des encans et des notifications en temps réel.
+Cardia est une application iOS de gestion et de mise en marché de cartes à collectionner (hockey, sports, collectibles), avec support des ventes à prix fixe, des encans et des notifications en temps réel.
 
 Le projet combine **SwiftUI**, **SwiftData**, **Firebase** et des **Cloud Functions** pour offrir une expérience fluide, moderne et scalable.
 

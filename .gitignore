@@ -1,0 +1,62 @@
+//
+//  Untitled.swift
+//  Collectly
+//
+//  Created by Eric Chandonnet on 2026-01-12.
+//
+## ======================
+# Xcode / Swift
+# ======================
+DerivedData/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.xcuserdata/
+*.xcarchive
+*.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings
+
+# ======================
+# macOS
+# ======================
+.DS_Store
+
+# ======================
+# Swift Package Manager
+# ======================
+.build/
+.swiftpm/
+
+# ======================
+# Firebase / Secrets
+# ======================
+GoogleService-Info.plist
+*.pem
+*.p12
+*.cer
+*.mobileprovision
+
+# ======================
+# Node / Firebase Functions
+# ======================
+functions/node_modules/
+functions/.firebase/
+functions/.env
+npm-debug.log*
+yarn-error.log*
+
+# ======================
+# Logs
+# ======================
+*.log
+
+# ======================
+# Environment / Secrets
+# ======================
+.env
+
+# ======================
+# Debug helpers (local only)
+# ======================
+DebugFirebaseError.swift
+
+Collectly/Info.plist

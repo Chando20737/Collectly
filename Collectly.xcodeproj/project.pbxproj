@@ -1,0 +1,691 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		573600E92F12D9690015A656 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 573600E82F12D9690015A656 /* FirebaseAuth */; };
+		573600EB2F12D9690015A656 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 573600EA2F12D9690015A656 /* FirebaseCore */; };
+		573600ED2F12D9690015A656 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 573600EC2F12D9690015A656 /* FirebaseFirestore */; };
+		573600EF2F12D9690015A656 /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 573600EE2F12D9690015A656 /* FirebaseStorage */; };
+		57AA6BCE2F1C6B8F0041F690 /* FirebaseAppCheck in Frameworks */ = {isa = PBXBuildFile; productRef = 57AA6BCD2F1C6B8F0041F690 /* FirebaseAppCheck */; };
+		57C83EC52F160C28005F75D3 /* .gitignore in Resources */ = {isa = PBXBuildFile; fileRef = 57C83EC42F160C28005F75D3 /* .gitignore */; };
+		57C83ED02F16FD65005F75D3 /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = 57C83ECF2F16FD65005F75D3 /* FirebaseMessaging */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		57219D6E2F12A23200808E5C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 57219D542F12A22E00808E5C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 57219D5B2F12A22E00808E5C;
+			remoteInfo = Collectly;
+		};
+		57219D782F12A23200808E5C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 57219D542F12A22E00808E5C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 57219D5B2F12A22E00808E5C;
+			remoteInfo = Collectly;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		57219D5C2F12A22E00808E5C /* Cardia.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Cardia.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		57219D6D2F12A23200808E5C /* CardiaTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CardiaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		57219D772F12A23200808E5C /* CardiaUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CardiaUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		57C83EC42F160C28005F75D3 /* .gitignore */ = {isa = PBXFileReference; lastKnownFileType = text; path = .gitignore; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		57219D7F2F12A23200808E5C /* Exceptions for "Collectly" folder in "Cardia" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				update_players_wikidata.swift,
+				update_players.swift,
+			);
+			target = 57219D5B2F12A22E00808E5C /* Cardia */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		57219D5E2F12A22E00808E5C /* Collectly */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				57219D7F2F12A23200808E5C /* Exceptions for "Collectly" folder in "Cardia" target */,
+			);
+			path = Collectly;
+			sourceTree = "<group>";
+		};
+		57219D702F12A23200808E5C /* CollectlyTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = CollectlyTests;
+			sourceTree = "<group>";
+		};
+		57219D7A2F12A23200808E5C /* CollectlyUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = CollectlyUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		57219D592F12A22E00808E5C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				573600EB2F12D9690015A656 /* FirebaseCore in Frameworks */,
+				573600EF2F12D9690015A656 /* FirebaseStorage in Frameworks */,
+				57C83ED02F16FD65005F75D3 /* FirebaseMessaging in Frameworks */,
+				573600E92F12D9690015A656 /* FirebaseAuth in Frameworks */,
+				57AA6BCE2F1C6B8F0041F690 /* FirebaseAppCheck in Frameworks */,
+				573600ED2F12D9690015A656 /* FirebaseFirestore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		57219D6A2F12A23200808E5C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		57219D742F12A23200808E5C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		57219D532F12A22E00808E5C = {
+			isa = PBXGroup;
+			children = (
+				57C83EC42F160C28005F75D3 /* .gitignore */,
+				57219D5E2F12A22E00808E5C /* Collectly */,
+				57219D702F12A23200808E5C /* CollectlyTests */,
+				57219D7A2F12A23200808E5C /* CollectlyUITests */,
+				57C83ECE2F16FD65005F75D3 /* Frameworks */,
+				57219D5D2F12A22E00808E5C /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		57219D5D2F12A22E00808E5C /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				57219D5C2F12A22E00808E5C /* Cardia.app */,
+				57219D6D2F12A23200808E5C /* CardiaTests.xctest */,
+				57219D772F12A23200808E5C /* CardiaUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		57C83ECE2F16FD65005F75D3 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		57219D5B2F12A22E00808E5C /* Cardia */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 57219D802F12A23200808E5C /* Build configuration list for PBXNativeTarget "Cardia" */;
+			buildPhases = (
+				57219D582F12A22E00808E5C /* Sources */,
+				57219D592F12A22E00808E5C /* Frameworks */,
+				57219D5A2F12A22E00808E5C /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				57219D5E2F12A22E00808E5C /* Collectly */,
+			);
+			name = Cardia;
+			packageProductDependencies = (
+				573600E82F12D9690015A656 /* FirebaseAuth */,
+				573600EA2F12D9690015A656 /* FirebaseCore */,
+				573600EC2F12D9690015A656 /* FirebaseFirestore */,
+				573600EE2F12D9690015A656 /* FirebaseStorage */,
+				57C83ECF2F16FD65005F75D3 /* FirebaseMessaging */,
+				57AA6BCD2F1C6B8F0041F690 /* FirebaseAppCheck */,
+			);
+			productName = Collectly;
+			productReference = 57219D5C2F12A22E00808E5C /* Cardia.app */;
+			productType = "com.apple.product-type.application";
+		};
+		57219D6C2F12A23200808E5C /* CardiaTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 57219D852F12A23200808E5C /* Build configuration list for PBXNativeTarget "CardiaTests" */;
+			buildPhases = (
+				57219D692F12A23200808E5C /* Sources */,
+				57219D6A2F12A23200808E5C /* Frameworks */,
+				57219D6B2F12A23200808E5C /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				57219D6F2F12A23200808E5C /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				57219D702F12A23200808E5C /* CollectlyTests */,
+			);
+			name = CardiaTests;
+			packageProductDependencies = (
+			);
+			productName = CollectlyTests;
+			productReference = 57219D6D2F12A23200808E5C /* CardiaTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		57219D762F12A23200808E5C /* CardiaUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 57219D882F12A23200808E5C /* Build configuration list for PBXNativeTarget "CardiaUITests" */;
+			buildPhases = (
+				57219D732F12A23200808E5C /* Sources */,
+				57219D742F12A23200808E5C /* Frameworks */,
+				57219D752F12A23200808E5C /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				57219D792F12A23200808E5C /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				57219D7A2F12A23200808E5C /* CollectlyUITests */,
+			);
+			name = CardiaUITests;
+			packageProductDependencies = (
+			);
+			productName = CollectlyUITests;
+			productReference = 57219D772F12A23200808E5C /* CardiaUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		57219D542F12A22E00808E5C /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2620;
+				LastUpgradeCheck = 2620;
+				TargetAttributes = {
+					57219D5B2F12A22E00808E5C = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					57219D6C2F12A23200808E5C = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = 57219D5B2F12A22E00808E5C;
+					};
+					57219D762F12A23200808E5C = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = 57219D5B2F12A22E00808E5C;
+					};
+				};
+			};
+			buildConfigurationList = 57219D572F12A22E00808E5C /* Build configuration list for PBXProject "Collectly" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 57219D532F12A22E00808E5C;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				573600E72F12D9690015A656 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 57219D5D2F12A22E00808E5C /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				57219D5B2F12A22E00808E5C /* Cardia */,
+				57219D6C2F12A23200808E5C /* CardiaTests */,
+				57219D762F12A23200808E5C /* CardiaUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		57219D5A2F12A22E00808E5C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				57C83EC52F160C28005F75D3 /* .gitignore in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		57219D6B2F12A23200808E5C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		57219D752F12A23200808E5C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		57219D582F12A22E00808E5C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		57219D692F12A23200808E5C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		57219D732F12A23200808E5C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		57219D6F2F12A23200808E5C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 57219D5B2F12A22E00808E5C /* Cardia */;
+			targetProxy = 57219D6E2F12A23200808E5C /* PBXContainerItemProxy */;
+		};
+		57219D792F12A23200808E5C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 57219D5B2F12A22E00808E5C /* Cardia */;
+			targetProxy = 57219D782F12A23200808E5C /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		57219D812F12A23200808E5C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
+				CODE_SIGN_ENTITLEMENTS = Collectly/Collectly.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = DFXPS625L5;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Collectly/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Cardia;
+				INFOPLIST_KEY_LSApplicationCategoryType = "";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Cardia a besoin de la caméra pour scanner tes cartes et les ajouter à ta collection.\nCardia a besoin de la caméra pour scanner tes cartes et les ajouter à ta collection.\nPour scanner les cartes";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Cardia a besoin d’accéder à vos photos pour importer une image de carte à scanner.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ericchandonnet.cardia;
+				PRODUCT_NAME = Cardia;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		57219D822F12A23200808E5C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
+				CODE_SIGN_ENTITLEMENTS = Collectly/Collectly.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = DFXPS625L5;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Collectly/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Cardia;
+				INFOPLIST_KEY_LSApplicationCategoryType = "";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Cardia a besoin de la caméra pour scanner tes cartes et les ajouter à ta collection.\nCardia a besoin de la caméra pour scanner tes cartes et les ajouter à ta collection.\nPour scanner les cartes";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Cardia a besoin d’accéder à vos photos pour importer une image de carte à scanner.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ericchandonnet.cardia;
+				PRODUCT_NAME = Cardia;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		57219D832F12A23200808E5C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		57219D842F12A23200808E5C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		57219D862F12A23200808E5C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = Chandonnet.CollectlyTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Collectly.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Collectly";
+			};
+			name = Debug;
+		};
+		57219D872F12A23200808E5C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = Chandonnet.CollectlyTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Collectly.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Collectly";
+			};
+			name = Release;
+		};
+		57219D892F12A23200808E5C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = Chandonnet.CollectlyUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Collectly;
+			};
+			name = Debug;
+		};
+		57219D8A2F12A23200808E5C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = Chandonnet.CollectlyUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Collectly;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		57219D572F12A22E00808E5C /* Build configuration list for PBXProject "Collectly" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				57219D832F12A23200808E5C /* Debug */,
+				57219D842F12A23200808E5C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		57219D802F12A23200808E5C /* Build configuration list for PBXNativeTarget "Cardia" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				57219D812F12A23200808E5C /* Debug */,
+				57219D822F12A23200808E5C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		57219D852F12A23200808E5C /* Build configuration list for PBXNativeTarget "CardiaTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				57219D862F12A23200808E5C /* Debug */,
+				57219D872F12A23200808E5C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		57219D882F12A23200808E5C /* Build configuration list for PBXNativeTarget "CardiaUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				57219D892F12A23200808E5C /* Debug */,
+				57219D8A2F12A23200808E5C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		573600E72F12D9690015A656 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 12.7.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		573600E82F12D9690015A656 /* FirebaseAuth */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 573600E72F12D9690015A656 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAuth;
+		};
+		573600EA2F12D9690015A656 /* FirebaseCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 573600E72F12D9690015A656 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseCore;
+		};
+		573600EC2F12D9690015A656 /* FirebaseFirestore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 573600E72F12D9690015A656 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseFirestore;
+		};
+		573600EE2F12D9690015A656 /* FirebaseStorage */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 573600E72F12D9690015A656 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseStorage;
+		};
+		57AA6BCD2F1C6B8F0041F690 /* FirebaseAppCheck */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 573600E72F12D9690015A656 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAppCheck;
+		};
+		57C83ECF2F16FD65005F75D3 /* FirebaseMessaging */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 573600E72F12D9690015A656 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseMessaging;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 57219D542F12A22E00808E5C /* Project object */;
+}
